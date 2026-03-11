@@ -119,47 +119,59 @@ def build_labels(n, exact_groups, near_groups, valid_paths):
 
 
 # ---------------------------------------------------------------------------
-# 신뢰 타원 — PCA 주축 기반 2-sigma
+# 네트워크 클러스터 레이아웃 계산
 # ---------------------------------------------------------------------------
 
-def _draw_ellipse(ax, pts, color, n_sigma=2.0):
+def _network_layout(labels: np.ndarray, group_meta: dict) -> np.ndarray:
     """
-    pts: (k, 2) array
-    - k >= 2: 공분산 행렬로 타원
-    - k == 1: 작은 원
+    중복 관계를 시각적으로 드러내는 좌표를 계산합니다.
+    - 중복 그룹: 원형으로 배치된 클러스터
+    - 고유 이미지: 바깥 링에 고르게 배치
     """
-    if len(pts) == 1:
-        ax.scatter(pts[:, 0], pts[:, 1], s=400, color=color,
-                   alpha=0.15, linewidths=0, zorder=2)
-        return
+    n = len(labels)
+    coords = np.zeros((n, 2))
+    n_groups = len(group_meta)
 
-    cx, cy = pts.mean(axis=0)
-    cov = np.cov(pts.T) if pts.shape[0] > 1 else np.eye(2) * 1e-6
-    if cov.ndim == 0:
-        cov = np.diag([float(cov), 1e-6])
+    # 그룹 클러스터 중심 — 정다각형 꼭짓점에 배치
+    cluster_r = 3.5 if n_groups > 1 else 0.0
+    group_centers = {}
+    for k, gid in enumerate(group_meta.keys()):
+        angle = 2 * np.pi * k / max(n_groups, 1) - np.pi / 2
+        group_centers[gid] = np.array([cluster_r * np.cos(angle),
+                                       cluster_r * np.sin(angle)])
 
-    vals, vecs = np.linalg.eigh(cov)
-    vals = np.maximum(vals, 0)
-    w, h = 2 * n_sigma * np.sqrt(vals)
-    angle = np.degrees(np.arctan2(*vecs[:, -1][::-1]))
+    # 각 그룹 내 노드: 소형 원형 배치
+    for gid, meta in group_meta.items():
+        idxs = np.where(labels == gid)[0]
+        cx, cy = group_centers[gid]
+        size = len(idxs)
+        inner_r = 0.55 * np.sqrt(size)   # 그룹 크기에 비례한 반지름
+        for j, idx in enumerate(idxs):
+            a = 2 * np.pi * j / max(size, 1) - np.pi / 2
+            coords[idx] = [cx + inner_r * np.cos(a),
+                           cy + inner_r * np.sin(a)]
 
-    # 채움 (연한 색)
-    ax.add_patch(Ellipse(xy=(cx, cy), width=max(w, 1e-3), height=max(h, 1e-3),
-                         angle=angle, facecolor=color, alpha=0.12,
-                         edgecolor="none", zorder=2))
-    # 테두리
-    ax.add_patch(Ellipse(xy=(cx, cy), width=max(w, 1e-3), height=max(h, 1e-3),
-                         angle=angle, facecolor="none",
-                         edgecolor=color, linewidth=1.2,
-                         alpha=0.75, zorder=3))
+    # 고유 이미지: 바깥 링
+    unique_idxs = np.where(labels == -1)[0]
+    n_unique = len(unique_idxs)
+    outer_r = cluster_r + 2.2
+    for j, idx in enumerate(unique_idxs):
+        a = 2 * np.pi * j / max(n_unique, 1)
+        coords[idx] = [outer_r * np.cos(a), outer_r * np.sin(a)]
+
+    return coords
 
 
 # ---------------------------------------------------------------------------
-# Scatter plot  — (a) 분포  (b) 그룹 크기 막대
+# 메인 그래프 — (a) 중복 관계 네트워크  (b) 그룹 크기 막대
 # ---------------------------------------------------------------------------
 
-def plot_scatter(coords, labels, group_meta, valid_paths, output_path,
+def plot_scatter(coords_pca, labels, group_meta, valid_paths, output_path,
                  method, data_dir, n_components, threshold):
+    """
+    coords_pca 는 사용하지 않음 (PCA 2D는 중복 이미지가 가까이 모이지 않아
+    관계 파악이 어려움). 대신 중복 그룹 구조를 직접 반영한 네트워크 레이아웃 사용.
+    """
     n_groups    = len(group_meta)
     n_unique    = int((labels == -1).sum())
     n_dup_imgs  = int((labels >= 0).sum())
@@ -168,78 +180,123 @@ def plot_scatter(coords, labels, group_meta, valid_paths, output_path,
 
     group_colors = {gid: _group_color(gid, n_groups) for gid in group_meta}
 
-    # 논문 2-column 너비 기준: 7.16 × 3.5 inch
+    # 네트워크 레이아웃 좌표
+    coords = _network_layout(labels, group_meta)
+
+    # 논문 2-column 기준: 7.16 × 3.8 inch
     fig, (ax, ax_bar) = plt.subplots(
-        1, 2, figsize=(7.16, 3.5),
-        gridspec_kw={"width_ratios": [3, 1], "wspace": 0.40},
+        1, 2, figsize=(7.16, 3.8),
+        gridspec_kw={"width_ratios": [3, 1], "wspace": 0.38},
     )
 
-    # ── (a) Scatter ───────────────────────────────────────────────────────
+    # ── (a) 중복 관계 네트워크 ────────────────────────────────────────────
     ax.set_facecolor("white")
-    ax.grid(True, color="#EBEBEB", linewidth=0.5, zorder=0)
-    ax.set_axisbelow(True)
+    ax.set_aspect("equal")
+    ax.axis("off")   # 축 숫자/눈금 제거 — 좌표값이 의미 없으므로
 
-    # 고유 이미지 (회색, 작게)
+    # 그룹 배경 원 (그룹 영역 강조)
+    for gid, meta in group_meta.items():
+        idxs = np.where(labels == gid)[0]
+        if len(idxs) < 2:
+            continue
+        cx, cy = coords[idxs].mean(axis=0)
+        r = np.linalg.norm(coords[idxs] - [cx, cy], axis=1).max() + 0.45
+        circle = plt.Circle((cx, cy), r,
+                             color=group_colors[gid], alpha=0.08,
+                             linewidth=1.2, linestyle="--",
+                             edgecolor=group_colors[gid], fill=True,
+                             zorder=1)
+        ax.add_patch(circle)
+
+    # 그룹 내 연결선 (엣지)
+    for gid, meta in group_meta.items():
+        idxs = np.where(labels == gid)[0]
+        color = group_colors[gid]
+        lw = 2.0 if meta["type"] == "exact" else 1.2
+        ls = "-" if meta["type"] == "exact" else "--"
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                x0, y0 = coords[idxs[a]]
+                x1, y1 = coords[idxs[b]]
+                ax.plot([x0, x1], [y0, y1], color=color,
+                        alpha=0.55, linewidth=lw, linestyle=ls, zorder=2)
+
+    # 고유 이미지 노드
     mask_u = labels == -1
     if mask_u.any():
         ax.scatter(coords[mask_u, 0], coords[mask_u, 1],
-                   c=UNIQUE_COLOR, s=18, alpha=0.60,
-                   linewidths=0, zorder=3)
+                   c=UNIQUE_COLOR, s=60, alpha=0.70,
+                   edgecolors="#888888", linewidths=0.6,
+                   zorder=4, marker="o")
+        # 파일명 레이블
+        for idx in np.where(mask_u)[0]:
+            ax.text(coords[idx, 0], coords[idx, 1] - 0.32,
+                    valid_paths[idx].stem[:14],
+                    ha="center", va="top", fontsize=5.5,
+                    color="#888888", zorder=5)
 
-    # 중복 그룹 — 같은 그룹 = 같은 색
+    # 중복 그룹 노드
     for gid, meta in group_meta.items():
-        mask  = labels == gid
-        pts   = coords[mask]
+        idxs  = np.where(labels == gid)[0]
         color = group_colors[gid]
         is_exact = meta["type"] == "exact"
+        marker = "^" if is_exact else "o"
 
-        # 1. 신뢰 타원 (그룹 영역)
-        _draw_ellipse(ax, pts, color)
+        ax.scatter(coords[idxs, 0], coords[idxs, 1],
+                   c=[color], s=100, alpha=0.95, zorder=5,
+                   marker=marker,
+                   edgecolors="white", linewidths=1.0)
 
-        # 2. 점 (exact: 삼각형, near: 원)
-        ax.scatter(pts[:, 0], pts[:, 1],
-                   c=[color], s=55, alpha=0.95, zorder=5,
-                   marker="^" if is_exact else "o",
-                   edgecolors="white", linewidths=0.6)
+        # 파일명 레이블
+        for idx in idxs:
+            ax.text(coords[idx, 0], coords[idx, 1] - 0.32,
+                    valid_paths[idx].stem[:14],
+                    ha="center", va="top", fontsize=5.5,
+                    color=color, zorder=6)
 
-        # 3. 그룹 레이블 — 중심점
-        cx, cy = pts.mean(axis=0)
-        ax.text(cx, cy, f"G{gid + 1}",
-                fontsize=7.5, fontweight="bold", color=color,
-                ha="center", va="center", zorder=6,
-                bbox=dict(facecolor="white", alpha=0.75,
-                          edgecolor="none", boxstyle="round,pad=0.2"))
+        # 그룹 레이블 (중심)
+        cx, cy = coords[idxs].mean(axis=0)
+        gtype_abbr = "Exact" if is_exact else "Near"
+        ax.text(cx, cy + np.linalg.norm(coords[idxs] - [cx, cy], axis=1).max() + 0.65,
+                f"Group {gid + 1}  ({gtype_abbr}, n={meta['size']})",
+                ha="center", va="bottom", fontsize=7, fontweight="bold",
+                color=color, zorder=7)
 
     # 범례
     legend_elems = [
-        mpatches.Patch(facecolor=UNIQUE_COLOR, edgecolor="none",
-                       label=f"Unique  (n = {n_unique})"),
+        mpatches.Patch(facecolor=UNIQUE_COLOR, edgecolor="#888",
+                       label="Unique image (no duplicate found)"),
+        plt.Line2D([0], [0], color="#555", linewidth=2.0, linestyle="-",
+                   label="Exact duplicate (identical MD5)"),
+        plt.Line2D([0], [0], color="#555", linewidth=1.2, linestyle="--",
+                   label="Near-duplicate (similar PCA hash)"),
     ]
-    for gid, meta in group_meta.items():
-        gtype = "Exact (MD5)" if meta["type"] == "exact" else "Near (PCA hash)"
-        marker = "^" if meta["type"] == "exact" else "o"
-        legend_elems.append(
-            plt.Line2D([0], [0], marker=marker, color="w",
-                       markerfacecolor=group_colors[gid],
-                       markersize=6, linewidth=0,
-                       label=f"G{gid + 1}  {gtype}  (n = {meta['size']})"))
-
-    ax.legend(handles=legend_elems, loc="best",
+    ax.legend(handles=legend_elems, loc="lower center",
+              bbox_to_anchor=(0.5, -0.05),
               frameon=True, framealpha=0.92, edgecolor="#CCCCCC",
-              handletextpad=0.5, borderpad=0.7)
+              ncol=3, fontsize=7, handlelength=1.5)
 
-    ax.set_xlabel(f"{method.upper()} Component 1")
-    ax.set_ylabel(f"{method.upper()} Component 2")
-    ax.set_title(f"(a)  Image distribution — {method.upper()} 2D projection",
-                 loc="left", pad=7)
-    for sp in ax.spines.values():
-        sp.set_linewidth(0.7)
-        sp.set_color("#AAAAAA")
+    ax.set_title(
+        "(a)  Duplicate relationship graph\n"
+        "Connected nodes share the same or similar content",
+        loc="left", pad=8, fontsize=9)
 
-    # ── (b) Group size bar ────────────────────────────────────────────────
+    # ── (b) 그룹 크기 막대 ────────────────────────────────────────────────
     ax_bar.set_facecolor("white")
     ax_bar.grid(axis="x", color="#EBEBEB", linewidth=0.5, zorder=0)
     ax_bar.set_axisbelow(True)
+
+    # 요약 통계 텍스트 박스
+    summary = (f"Total images:  {total}\n"
+               f"Unique:            {n_unique}\n"
+               f"Dup. groups:    {n_groups}\n"
+               f"Dup. images:    {n_dup_imgs}\n"
+               f"Removable:      {n_removable}")
+    ax_bar.text(0.05, 0.98, summary, transform=ax_bar.transAxes,
+                fontsize=7.5, va="top", ha="left",
+                family="monospace",
+                bbox=dict(facecolor="#F7F7F7", edgecolor="#DDDDDD",
+                          boxstyle="round,pad=0.5", linewidth=0.7))
 
     if n_groups:
         gids   = list(group_meta.keys())
@@ -247,39 +304,43 @@ def plot_scatter(coords, labels, group_meta, valid_paths, output_path,
         colors = [group_colors[g] for g in gids]
         ypos   = list(range(len(gids)))
 
-        bars = ax_bar.barh(ypos, sizes, color=colors,
-                           edgecolor="white", linewidth=0.5, height=0.55)
+        # 요약 박스 아래에서 시작 (axes 좌표 0.40 아래)
+        bar_ax_h = 0.45
+        bar_ax = ax_bar.inset_axes([0.0, 0.0, 1.0, bar_ax_h])
+        bar_ax.set_facecolor("white")
+        bar_ax.grid(axis="x", color="#EBEBEB", linewidth=0.5, zorder=0)
+        bar_ax.set_axisbelow(True)
+
+        bars = bar_ax.barh(ypos, sizes, color=colors,
+                           edgecolor="white", linewidth=0.5, height=0.6)
         for bar, sz in zip(bars, sizes):
-            ax_bar.text(bar.get_width() + 0.05,
+            bar_ax.text(bar.get_width() + 0.05,
                         bar.get_y() + bar.get_height() / 2,
                         str(sz), va="center", ha="left", fontsize=7)
 
         ylabels = [
-            f"G{g + 1}  ({'Exact' if group_meta[g]['type'] == 'exact' else 'Near'})"
+            f"G{g + 1} ({'E' if group_meta[g]['type'] == 'exact' else 'N'})"
             for g in gids
         ]
-        ax_bar.set_yticks(ypos)
-        ax_bar.set_yticklabels(ylabels)
-        ax_bar.invert_yaxis()
-        ax_bar.set_xlim(0, max(sizes) * 1.30)
-        ax_bar.set_xlabel("Number of images")
-    else:
-        ax_bar.text(0.5, 0.5, "No duplicates\ndetected",
-                    ha="center", va="center",
-                    transform=ax_bar.transAxes, color="#999999")
+        bar_ax.set_yticks(ypos)
+        bar_ax.set_yticklabels(ylabels, fontsize=7.5)
+        bar_ax.invert_yaxis()
+        bar_ax.set_xlim(0, max(sizes) * 1.35)
+        bar_ax.set_xlabel("Images in group", fontsize=7.5)
+        bar_ax.tick_params(labelsize=7)
+        for sp in bar_ax.spines.values():
+            sp.set_linewidth(0.5)
+            sp.set_color("#CCCCCC")
 
-    ax_bar.set_title("(b)  Duplicate groups", loc="left", pad=7)
-    for sp in ax_bar.spines.values():
-        sp.set_linewidth(0.7)
-        sp.set_color("#AAAAAA")
+    ax_bar.axis("off")
+    ax_bar.set_title("(b)  Group summary\n(E=Exact, N=Near)",
+                     loc="left", pad=8, fontsize=9)
 
-    # 하단 파라미터 메모 (figure caption 용)
-    fig.text(0.5, -0.02,
+    # 하단 파라미터 (caption용)
+    fig.text(0.5, -0.01,
              f"Dataset: {Path(data_dir).name}   |   "
-             f"hash bits = {n_components},  Hamming ≤ {threshold}   |   "
-             f"total = {total},  unique = {n_unique},  "
-             f"dup groups = {n_groups},  removable = {n_removable}",
-             ha="center", fontsize=7, color="#666666")
+             f"PCA hash bits = {n_components},  Hamming threshold = {threshold}",
+             ha="center", fontsize=7, color="#777777")
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)

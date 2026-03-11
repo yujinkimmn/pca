@@ -892,7 +892,8 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
 def main():
     parser = argparse.ArgumentParser(
         description="PCA Hash Deduplication — 논문용 시각화")
-    parser.add_argument("--data_dir",           required=True)
+    parser.add_argument("--data_dir",           required=True, nargs="+",
+                        help="이미지 데이터셋 디렉토리 (여러 개 지정 가능)")
     parser.add_argument("--output",             default="dedup_visualization.png")
     parser.add_argument("--method",             choices=["pca", "umap"], default="pca")
     parser.add_argument("--n_components",       type=int, default=32)
@@ -904,7 +905,8 @@ def main():
                         help="중복 그룹 갤러리 HTML 생성 건너뜀")
     args = parser.parse_args()
 
-    print(f"\n이미지 수집: {args.data_dir}")
+    data_dir_label = " + ".join(args.data_dir)
+    print(f"\n이미지 수집: {data_dir_label}")
     paths = collect_image_paths(args.data_dir)
     print(f"  발견: {len(paths):,}장")
     if not paths:
@@ -931,7 +933,7 @@ def main():
 
     out = Path(args.output)
     plot_scatter(coords, labels, group_meta, valid_paths, str(out),
-                 args.method, args.data_dir,
+                 args.method, data_dir_label,
                  args.n_components, args.hamming_threshold)
 
     if len(valid_paths) <= 300:
@@ -944,12 +946,12 @@ def main():
         print("갤러리 HTML 생성 중...")
         gallery_out = str(out.with_name(out.stem + "_gallery.html"))
         plot_gallery(valid_paths, labels, group_meta, gallery_out,
-                     args.data_dir, args.n_components, args.hamming_threshold,
+                     data_dir_label, args.n_components, args.hamming_threshold,
                      coords=coords)
 
     print("인터랙티브 HTML 생성 중...")
     plot_interactive(coords, labels, group_meta, valid_paths, str(out),
-                     args.method, args.data_dir,
+                     args.method, data_dir_label,
                      args.n_components, args.hamming_threshold)
 
     n_unique = int((labels == -1).sum())

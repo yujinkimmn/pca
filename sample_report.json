@@ -1,0 +1,45 @@
+{
+  "total_images": 15,
+  "n_components": 32,
+  "hamming_threshold": 2,
+  "exact_duplicates": {
+    "group_count": 2,
+    "removable_count": 3
+  },
+  "near_duplicates": {
+    "group_count": 4,
+    "removable_count": 5
+  },
+  "total_removable": 8,
+  "estimated_clean_count": 7,
+  "exact_groups": {
+    "093d00c5dfcc93370bf2598c18474e86": [
+      "sample_images/img_000.jpg",
+      "sample_images/img_dup_exact_1.jpg"
+    ],
+    "f1b6b5e98e6bc295c8c34a6bbe7928b7": [
+      "sample_images/img_001.jpg",
+      "sample_images/img_dup_exact_2.jpg",
+      "sample_images/img_dup_exact_3.jpg"
+    ]
+  },
+  "near_groups": [
+    [
+      "sample_images/img_000.jpg",
+      "sample_images/img_dup_exact_1.jpg"
+    ],
+    [
+      "sample_images/img_002.jpg",
+      "sample_images/img_near_dup_1.jpg"
+    ],
+    [
+      "sample_images/img_003.jpg",
+      "sample_images/img_008.jpg",
+      "sample_images/img_near_dup_2.jpg"
+    ],
+    [
+      "sample_images/img_dup_exact_2.jpg",
+      "sample_images/img_dup_exact_3.jpg"
+    ]
+  ]
+}

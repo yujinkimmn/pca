@@ -406,6 +406,148 @@ def plot_heatmap(valid_paths, labels, group_meta, group_colors,
 
 
 # ---------------------------------------------------------------------------
+# Interactive HTML (Plotly) — 마우스오버 시 실제 이미지 표시
+# ---------------------------------------------------------------------------
+
+def _encode_img_b64(path: Path, thumb: int = 120) -> str:
+    """이미지를 base64 PNG 문자열로 인코딩합니다."""
+    import base64, io
+    from PIL import Image as PILImage
+    try:
+        img = PILImage.open(path).convert("RGB")
+        img.thumbnail((thumb, thumb))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+def plot_interactive(coords, labels, group_meta, valid_paths, output_path,
+                     method, data_dir, n_components, threshold):
+    """
+    Plotly로 인터랙티브 HTML을 생성합니다.
+    마커에 마우스를 올리면 실제 이미지 + 파일명 + 그룹 정보가 툴팁에 표시됩니다.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        print("  [경고] plotly 미설치. `pip install plotly`")
+        return
+
+    n_groups     = len(group_meta)
+    group_colors = {gid: _group_color(gid, n_groups) for gid in group_meta}
+
+    print("  이미지 base64 인코딩 중...")
+    b64_imgs = [_encode_img_b64(p) for p in valid_paths]
+
+    fig = go.Figure()
+
+    # ── 고유 이미지 트레이스 ──────────────────────────────────────────────
+    mask_u = labels == -1
+    u_idxs = np.where(mask_u)[0]
+    if len(u_idxs):
+        custom = [
+            [valid_paths[i].name, b64_imgs[i]]
+            for i in u_idxs
+        ]
+        fig.add_trace(go.Scatter(
+            x=coords[u_idxs, 0], y=coords[u_idxs, 1],
+            mode="markers",
+            name="Unique",
+            marker=dict(color=UNIQUE_COLOR, size=9,
+                        symbol="circle",
+                        line=dict(width=0.5, color="#888888")),
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Unique image<br>"
+                "<img src='data:image/png;base64,%{customdata[1]}' "
+                "width='120' style='border-radius:4px'>"
+                "<extra></extra>"
+            ),
+        ))
+
+    # ── 중복 그룹 트레이스 ───────────────────────────────────────────────
+    for gid, meta in group_meta.items():
+        mask  = labels == gid
+        idxs  = np.where(mask)[0]
+        pts   = coords[idxs]
+        color = group_colors[gid]
+        is_exact = meta["type"] == "exact"
+        gtype_str = "Exact (MD5)" if is_exact else "Near (PCA hash)"
+        symbol = "triangle-up" if is_exact else "circle"
+
+        custom = [
+            [valid_paths[i].name, b64_imgs[i], f"G{gid+1}", gtype_str]
+            for i in idxs
+        ]
+        fig.add_trace(go.Scatter(
+            x=pts[:, 0], y=pts[:, 1],
+            mode="markers+text",
+            name=f"G{gid+1}  {gtype_str}  (n={meta['size']})",
+            marker=dict(color=color, size=13, symbol=symbol,
+                        line=dict(width=1.5, color="white")),
+            text=[f"G{gid+1}"] * len(idxs),
+            textposition="top center",
+            textfont=dict(size=9, color=color),
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Group %{customdata[2]}  |  %{customdata[3]}<br>"
+                "<img src='data:image/png;base64,%{customdata[1]}' "
+                "width='120' style='border-radius:4px'>"
+                "<extra></extra>"
+            ),
+        ))
+
+        # 그룹 중심점 — 타원 대신 dashed circle shape (Plotly에선 ellipse가 제한적)
+        cx, cy = pts.mean(axis=0)
+        # 대략적인 반지름
+        if len(pts) >= 2:
+            r_x = max(np.std(pts[:, 0]) * 2.5, 50)
+            r_y = max(np.std(pts[:, 1]) * 2.5, 50)
+        else:
+            r_x = r_y = 80
+        fig.add_shape(type="circle",
+                      x0=cx - r_x, y0=cy - r_y,
+                      x1=cx + r_x, y1=cy + r_y,
+                      line=dict(color=color, width=1.5, dash="dot"),
+                      fillcolor=color, opacity=0.08)
+
+    fig.update_layout(
+        title=dict(
+            text=(f"Image Distribution — {Path(data_dir).name}  |  "
+                  f"{method.upper()} 2D  |  hash bits={n_components}, "
+                  f"Hamming ≤ {threshold}"),
+            font=dict(size=14),
+            x=0.5,
+        ),
+        xaxis=dict(title=f"{method.upper()} Component 1",
+                   gridcolor="#EBEBEB", zeroline=False),
+        yaxis=dict(title=f"{method.upper()} Component 2",
+                   gridcolor="#EBEBEB", zeroline=False),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.9)",
+            bordercolor="#DDDDDD",
+            borderwidth=1,
+        ),
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="#CCCCCC",
+            font_size=12,
+        ),
+        width=900, height=650,
+    )
+
+    out_html = Path(output_path).with_suffix(".html")
+    fig.write_html(str(out_html), include_plotlyjs="cdn")
+    print(f"Interactive HTML 저장: {out_html.resolve()}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -418,6 +560,8 @@ def main():
     parser.add_argument("--n_components",       type=int, default=32)
     parser.add_argument("--hamming_threshold",  type=int, default=2)
     parser.add_argument("--image_size",         type=int, default=64)
+    parser.add_argument("--interactive",        action="store_true",
+                        help="Plotly HTML 인터랙티브 뷰어도 생성 (마우스오버 시 이미지 표시)")
     args = parser.parse_args()
 
     print(f"\n이미지 수집: {args.data_dir}")
@@ -455,6 +599,12 @@ def main():
                      args.n_components, args.image_size,
                      args.hamming_threshold,
                      str(out.with_name(out.stem + "_heatmap" + out.suffix)))
+
+    if args.interactive:
+        print("인터랙티브 HTML 생성 중...")
+        plot_interactive(coords, labels, group_meta, valid_paths, str(out),
+                         args.method, args.data_dir,
+                         args.n_components, args.hamming_threshold)
 
     n_unique = int((labels == -1).sum())
     n_dup    = int((labels >= 0).sum())

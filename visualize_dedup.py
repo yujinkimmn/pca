@@ -613,7 +613,8 @@ def plot_interactive(coords, labels, group_meta, valid_paths, output_path,
 # ---------------------------------------------------------------------------
 
 def plot_gallery(valid_paths, labels, group_meta, output_path,
-                 data_dir, n_components, threshold, thumb=180):
+                 data_dir, n_components, threshold, thumb=180,
+                 coords=None):
     """
     중복 그룹별로 실제 이미지 썸네일을 나란히 보여주는 HTML 갤러리 생성.
     HuggingFace image deduplication toolkit의 시각화 스타일.
@@ -727,6 +728,106 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
       </div>
     </div>"""
 
+    # ── Canvas 산점도 데이터 (순수 JS, CDN 불필요) ────────────────────────
+    scatter_section = ""
+    if coords is not None:
+        import json
+        pts = []
+        for i, (path, lbl) in enumerate(zip(valid_paths, labels)):
+            if lbl == -1:
+                color = "#BBBBBB"
+                group_label = "Unique"
+            else:
+                color = COLORS[lbl % len(COLORS)]
+                meta  = group_meta[lbl]
+                gtype = "Exact" if meta["type"] == "exact" else "Near"
+                group_label = f"Group {lbl+1} ({gtype})"
+            b64 = encode(path)
+            pts.append({
+                "x": float(coords[i, 0]),
+                "y": float(coords[i, 1]),
+                "color": color,
+                "label": group_label,
+                "name": path.name,
+                "img": b64,
+            })
+        pts_json = json.dumps(pts)
+
+        scatter_section = f"""
+  <h2 style="margin-top:32px;">인터랙티브 산점도 (마우스오버 시 이미지)</h2>
+  <div style="background:white;border-radius:12px;padding:20px;
+              box-shadow:0 1px 4px rgba(0,0,0,0.08);margin-bottom:24px;
+              position:relative;">
+    <canvas id="scatter" width="860" height="500"
+            style="border:1px solid #eee;border-radius:8px;cursor:crosshair;
+                   display:block;margin:0 auto;"></canvas>
+    <div id="tooltip" style="position:fixed;display:none;background:white;
+         border:1px solid #ddd;border-radius:8px;padding:8px 10px;
+         box-shadow:0 2px 8px rgba(0,0,0,0.15);pointer-events:none;z-index:999;
+         font-size:12px;max-width:220px;text-align:center;"></div>
+  </div>
+  <script>
+  (function(){{
+    const pts = {pts_json};
+    const canvas = document.getElementById('scatter');
+    const ctx = canvas.getContext('2d');
+    const tip = document.getElementById('tooltip');
+    const W = canvas.width, H = canvas.height, PAD = 40;
+
+    const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
+    const xMin=Math.min(...xs), xMax=Math.max(...xs);
+    const yMin=Math.min(...ys), yMax=Math.max(...ys);
+    const xR=xMax-xMin||1, yR=yMax-yMin||1;
+
+    function tx(x){{ return PAD + (x-xMin)/xR*(W-2*PAD); }}
+    function ty(y){{ return H-PAD - (y-yMin)/yR*(H-2*PAD); }}
+
+    function draw(){{
+      ctx.clearRect(0,0,W,H);
+      ctx.fillStyle='#fafafa'; ctx.fillRect(0,0,W,H);
+      // grid
+      ctx.strokeStyle='#efefef'; ctx.lineWidth=1;
+      for(let i=0;i<=5;i++){{
+        let gx=PAD+i*(W-2*PAD)/5, gy=PAD+i*(H-2*PAD)/5;
+        ctx.beginPath(); ctx.moveTo(gx,PAD); ctx.lineTo(gx,H-PAD); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(PAD,gy); ctx.lineTo(W-PAD,gy); ctx.stroke();
+      }}
+      pts.forEach(p=>{{
+        ctx.beginPath();
+        ctx.arc(tx(p.x), ty(p.y), p.label==='Unique'?5:8, 0, Math.PI*2);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.label==='Unique'?0.55:0.9;
+        ctx.fill();
+        ctx.globalAlpha=1;
+        ctx.strokeStyle='white'; ctx.lineWidth=1.5; ctx.stroke();
+      }});
+    }}
+    draw();
+
+    canvas.addEventListener('mousemove', function(e){{
+      const rect=canvas.getBoundingClientRect();
+      const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+      let best=null, bestD=Infinity;
+      pts.forEach(p=>{{
+        const d=Math.hypot(tx(p.x)-mx, ty(p.y)-my);
+        if(d<bestD){{ bestD=d; best=p; }}
+      }});
+      if(best && bestD<20){{
+        let html='<b>'+best.name+'</b><br><span style="color:#888">'+best.label+'</span>';
+        if(best.img) html+='<br><img src="data:image/jpeg;base64,'+best.img+
+          '" style="width:120px;height:120px;object-fit:cover;border-radius:6px;margin-top:6px;">';
+        tip.innerHTML=html;
+        tip.style.display='block';
+        tip.style.left=(e.clientX+14)+'px';
+        tip.style.top=(e.clientY-10)+'px';
+      }} else {{
+        tip.style.display='none';
+      }}
+    }});
+    canvas.addEventListener('mouseleave',()=>{{ tip.style.display='none'; }});
+  }})();
+  </script>"""
+
     # ── 전체 HTML ─────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -766,6 +867,8 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
         <div class="stat-lbl">Removable images</div></div>
     </div>
   </div>
+
+  {scatter_section}
 
   <h2>Duplicate Groups</h2>
   {''.join(group_sections) if group_sections else
@@ -841,7 +944,8 @@ def main():
         print("갤러리 HTML 생성 중...")
         gallery_out = str(out.with_name(out.stem + "_gallery.html"))
         plot_gallery(valid_paths, labels, group_meta, gallery_out,
-                     args.data_dir, args.n_components, args.hamming_threshold)
+                     args.data_dir, args.n_components, args.hamming_threshold,
+                     coords=coords)
 
     print("인터랙티브 HTML 생성 중...")
     plot_interactive(coords, labels, group_meta, valid_paths, str(out),

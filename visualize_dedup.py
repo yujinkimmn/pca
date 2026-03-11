@@ -604,7 +604,7 @@ def plot_interactive(coords, labels, group_meta, valid_paths, output_path,
     )
 
     out_html = Path(output_path).with_suffix(".html")
-    fig.write_html(str(out_html), include_plotlyjs=True)
+    fig.write_html(str(out_html), include_plotlyjs="cdn")
     print(f"Interactive HTML 저장: {out_html.resolve()}")
 
 

@@ -110,9 +110,7 @@ python pca_dedup.py cross \
 
 아래 링크를 클릭하면 중복 탐지 결과를 인터랙티브하게 확인할 수 있습니다.
 
-**[갤러리 보기 — 중복 그룹별 이미지 썸네일](https://htmlpreview.github.io/?https://raw.githubusercontent.com/yujinkimmn/pca/refs/heads/claude/pca-hash-deduplication-XvFm0/dedup_visualization_gallery.html)**
-
-**[인터랙티브 산점도 (hover 시 이미지 표시)](https://htmlpreview.github.io/?https://raw.githubusercontent.com/yujinkimmn/pca/refs/heads/claude/pca-hash-deduplication-XvFm0/dedup_visualization.html)**
+**[갤러리 보기 — 산점도 + 중복 그룹별 이미지 썸네일](https://htmlpreview.github.io/?https://raw.githubusercontent.com/yujinkimmn/pca/refs/heads/claude/pca-hash-deduplication-XvFm0/dedup_visualization_gallery.html)**
 
 ## 지원 이미지 형식
 

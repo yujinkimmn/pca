@@ -604,7 +604,7 @@ def plot_interactive(coords, labels, group_meta, valid_paths, output_path,
     )
 
     out_html = Path(output_path).with_suffix(".html")
-    fig.write_html(str(out_html), include_plotlyjs="cdn")
+    fig.write_html(str(out_html), include_plotlyjs=True)
     print(f"Interactive HTML 저장: {out_html.resolve()}")
 
 
@@ -843,11 +843,10 @@ def main():
         plot_gallery(valid_paths, labels, group_meta, gallery_out,
                      args.data_dir, args.n_components, args.hamming_threshold)
 
-    if args.interactive:
-        print("인터랙티브 HTML 생성 중...")
-        plot_interactive(coords, labels, group_meta, valid_paths, str(out),
-                         args.method, args.data_dir,
-                         args.n_components, args.hamming_threshold)
+    print("인터랙티브 HTML 생성 중...")
+    plot_interactive(coords, labels, group_meta, valid_paths, str(out),
+                     args.method, args.data_dir,
+                     args.n_components, args.hamming_threshold)
 
     n_unique = int((labels == -1).sum())
     n_dup    = int((labels >= 0).sum())

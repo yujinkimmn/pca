@@ -37,13 +37,15 @@ from tqdm import tqdm
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".tif", ".webp"}
 
 
-def collect_image_paths(data_dir: str) -> list[Path]:
-    """디렉토리에서 모든 이미지 경로를 재귀적으로 수집합니다."""
-    data_dir = Path(data_dir)
+def collect_image_paths(data_dir) -> list[Path]:
+    """디렉토리(들)에서 모든 이미지 경로를 재귀적으로 수집합니다."""
+    dirs = [data_dir] if isinstance(data_dir, (str, Path)) else data_dir
     paths = []
-    for ext in IMAGE_EXTENSIONS:
-        paths.extend(data_dir.rglob(f"*{ext}"))
-        paths.extend(data_dir.rglob(f"*{ext.upper()}"))
+    for d in dirs:
+        d = Path(d)
+        for ext in IMAGE_EXTENSIONS:
+            paths.extend(d.rglob(f"*{ext}"))
+            paths.extend(d.rglob(f"*{ext.upper()}"))
     return sorted(set(paths))
 
 
@@ -428,7 +430,8 @@ def parse_args():
 
     # --- 공통 인자 ---
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data_dir", required=True, help="이미지 데이터셋 디렉토리")
+    common.add_argument("--data_dir", required=True, nargs="+",
+                        help="이미지 데이터셋 디렉토리 (여러 개 지정 가능)")
     common.add_argument("--n_components", type=int, default=32,
                         help="PCA 성분 수 (해시 비트 수). 클수록 정밀 (기본값: 32)")
     common.add_argument("--hamming_threshold", type=int, default=2,
@@ -484,7 +487,8 @@ def main():
     # -----------------------------------------------------------------------
     # 1. 이미지 수집
     # -----------------------------------------------------------------------
-    print(f"\n이미지 수집 중: {args.data_dir}")
+    dirs_str = ", ".join(args.data_dir)
+    print(f"\n이미지 수집 중: {dirs_str}")
     paths = collect_image_paths(args.data_dir)
     print(f"  발견된 이미지 수: {len(paths):,}")
     if not paths:

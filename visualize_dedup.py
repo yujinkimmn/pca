@@ -609,6 +609,180 @@ def plot_interactive(coords, labels, group_meta, valid_paths, output_path,
 
 
 # ---------------------------------------------------------------------------
+# Duplicate Gallery HTML — HF 스타일 이미지 썸네일 그리드
+# ---------------------------------------------------------------------------
+
+def plot_gallery(valid_paths, labels, group_meta, output_path,
+                 data_dir, n_components, threshold, thumb=180):
+    """
+    중복 그룹별로 실제 이미지 썸네일을 나란히 보여주는 HTML 갤러리 생성.
+    HuggingFace image deduplication toolkit의 시각화 스타일.
+    """
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        print("  [경고] Pillow 미설치. 갤러리 생성 불가.")
+        return
+
+    import base64, io
+
+    def encode(path):
+        try:
+            img = PILImage.open(path).convert("RGB")
+            img.thumbnail((thumb, thumb))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            return ""
+
+    n_groups  = len(group_meta)
+    n_unique  = int((labels == -1).sum())
+    n_dup_img = int((labels >= 0).sum())
+    n_removable = max(0, n_dup_img - n_groups)
+
+    COLORS = OKABE_ITO
+
+    def hex_to_rgba(h, a=0.15):
+        h = h.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{a})"
+
+    # ── 그룹 섹션 HTML ────────────────────────────────────────────────────
+    group_sections = []
+    for gid, meta in group_meta.items():
+        idxs     = [i for i, l in enumerate(labels) if l == gid]
+        color    = COLORS[gid % len(COLORS)]
+        bg       = hex_to_rgba(color, 0.10)
+        border   = hex_to_rgba(color, 0.60)
+        is_exact = meta["type"] == "exact"
+        badge    = ("Exact duplicate" if is_exact else "Near-duplicate")
+        badge_bg = "#e74c3c" if is_exact else "#2980b9"
+
+        cards = []
+        for rank, idx in enumerate(idxs):
+            b64  = encode(valid_paths[idx])
+            name = valid_paths[idx].name
+            keep = "KEEP" if rank == 0 else "REMOVE"
+            keep_color = "#27ae60" if rank == 0 else "#e74c3c"
+            img_tag = (f'<img src="data:image/jpeg;base64,{b64}" '
+                       f'style="width:{thumb}px;height:{thumb}px;'
+                       f'object-fit:cover;border-radius:6px;">' if b64 else
+                       f'<div style="width:{thumb}px;height:{thumb}px;'
+                       f'background:#eee;border-radius:6px;display:flex;'
+                       f'align-items:center;justify-content:center;color:#aaa;">no img</div>')
+            cards.append(f"""
+            <div style="text-align:center;margin:6px;">
+              {img_tag}
+              <div style="font-size:11px;color:#555;margin-top:4px;
+                          max-width:{thumb}px;word-break:break-all;">{name}</div>
+              <div style="font-size:10px;font-weight:bold;color:{keep_color};
+                          margin-top:2px;">{keep}</div>
+            </div>""")
+
+        group_sections.append(f"""
+        <div style="background:{bg};border:1.5px solid {border};
+                    border-radius:10px;padding:16px 20px;margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <span style="background:{badge_bg};color:white;font-size:12px;
+                         font-weight:bold;padding:3px 10px;border-radius:20px;">
+              {badge}
+            </span>
+            <span style="font-size:13px;font-weight:bold;color:#333;">
+              Group {gid+1} &nbsp;·&nbsp; {meta['size']} images
+            </span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;">
+            {''.join(cards)}
+          </div>
+        </div>""")
+
+    # ── 고유 이미지 섹션 ──────────────────────────────────────────────────
+    unique_idxs = [i for i, l in enumerate(labels) if l == -1]
+    unique_cards = []
+    for idx in unique_idxs[:48]:   # 최대 48장만 표시
+        b64  = encode(valid_paths[idx])
+        name = valid_paths[idx].name
+        img_tag = (f'<img src="data:image/jpeg;base64,{b64}" '
+                   f'style="width:80px;height:80px;object-fit:cover;'
+                   f'border-radius:5px;opacity:0.75;">' if b64 else "")
+        unique_cards.append(f"""
+        <div style="text-align:center;margin:4px;">
+          {img_tag}
+          <div style="font-size:9px;color:#888;max-width:80px;
+                      word-break:break-all;">{name[:16]}</div>
+        </div>""")
+    more_txt = (f'<div style="color:#aaa;font-size:12px;padding:10px;">'
+                f'+ {len(unique_idxs)-48} more unique images</div>'
+                if len(unique_idxs) > 48 else "")
+
+    unique_section = f"""
+    <div style="background:#f9f9f9;border:1px solid #ddd;border-radius:10px;
+                padding:16px 20px;margin-bottom:18px;">
+      <div style="font-size:13px;font-weight:bold;color:#666;margin-bottom:10px;">
+        Unique images ({n_unique} total, no duplicates found)
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;">
+        {''.join(unique_cards)}{more_txt}
+      </div>
+    </div>"""
+
+    # ── 전체 HTML ─────────────────────────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Image Deduplication Gallery — {Path(data_dir).name}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f4f5f7; margin: 0; padding: 24px; }}
+    .container {{ max-width: 1100px; margin: 0 auto; }}
+    .header {{ background: white; border-radius: 12px; padding: 24px 28px;
+               margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
+    .stat-grid {{ display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; }}
+    .stat {{ background: #f0f4ff; border-radius: 8px; padding: 10px 18px;
+             text-align: center; }}
+    .stat-val {{ font-size: 24px; font-weight: bold; color: #2c3e50; }}
+    .stat-lbl {{ font-size: 11px; color: #888; margin-top: 2px; }}
+    h1 {{ margin: 0 0 4px; font-size: 20px; color: #1a1a2e; }}
+    h2 {{ font-size: 15px; color: #444; margin: 0 0 14px; font-weight: 600; }}
+    .params {{ font-size: 12px; color: #999; margin-top: 6px; }}
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Image Deduplication Gallery</h1>
+    <div class="params">Dataset: <b>{Path(data_dir).name}</b> &nbsp;|&nbsp;
+      PCA hash bits = {n_components} &nbsp;|&nbsp; Hamming threshold = {threshold}</div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-val">{len(valid_paths)}</div>
+        <div class="stat-lbl">Total images</div></div>
+      <div class="stat"><div class="stat-val">{n_unique}</div>
+        <div class="stat-lbl">Unique</div></div>
+      <div class="stat"><div class="stat-val">{n_groups}</div>
+        <div class="stat-lbl">Duplicate groups</div></div>
+      <div class="stat"><div class="stat-val" style="color:#e74c3c">{n_removable}</div>
+        <div class="stat-lbl">Removable images</div></div>
+    </div>
+  </div>
+
+  <h2>Duplicate Groups</h2>
+  {''.join(group_sections) if group_sections else
+   '<div style="color:#aaa;padding:20px;">No duplicates found.</div>'}
+
+  <h2 style="margin-top:28px;">Unique Images</h2>
+  {unique_section}
+</div>
+</body>
+</html>"""
+
+    out = Path(output_path).with_suffix(".html")
+    out.write_text(html, encoding="utf-8")
+    print(f"Gallery HTML 저장: {out.resolve()}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -623,6 +797,8 @@ def main():
     parser.add_argument("--image_size",         type=int, default=64)
     parser.add_argument("--interactive",        action="store_true",
                         help="Plotly HTML 인터랙티브 뷰어도 생성 (마우스오버 시 이미지 표시)")
+    parser.add_argument("--no_gallery",         action="store_true",
+                        help="중복 그룹 갤러리 HTML 생성 건너뜀")
     args = parser.parse_args()
 
     print(f"\n이미지 수집: {args.data_dir}")
@@ -660,6 +836,12 @@ def main():
                      args.n_components, args.image_size,
                      args.hamming_threshold,
                      str(out.with_name(out.stem + "_heatmap" + out.suffix)))
+
+    if not args.no_gallery:
+        print("갤러리 HTML 생성 중...")
+        gallery_out = str(out.with_name(out.stem + "_gallery.html"))
+        plot_gallery(valid_paths, labels, group_meta, gallery_out,
+                     args.data_dir, args.n_components, args.hamming_threshold)
 
     if args.interactive:
         print("인터랙티브 HTML 생성 중...")

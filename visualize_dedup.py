@@ -667,7 +667,7 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
             name = valid_paths[idx].name
             keep = "KEEP" if rank == 0 else "REMOVE"
             keep_color = "#27ae60" if rank == 0 else "#e74c3c"
-            path_json = _json.dumps(str(valid_paths[idx]))
+            path_json = _json.dumps(str(valid_paths[idx].resolve()))
             img_tag = (f'<img src="data:image/jpeg;base64,{b64}" '
                        f'style="width:{thumb}px;height:{thumb}px;'
                        f'object-fit:cover;border-radius:6px;">' if b64 else

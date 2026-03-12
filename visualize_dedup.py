@@ -674,8 +674,7 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
                        f'<div style="width:{thumb}px;height:{thumb}px;'
                        f'background:#eee;border-radius:6px;display:flex;'
                        f'align-items:center;justify-content:center;color:#aaa;">no img</div>')
-            del_btn = (f'<button class="del-btn" data-path={path_json}>🗑 삭제</button>'
-                       if rank != 0 else '')
+            del_btn = f'<button class="del-btn" data-path={path_json}>🗑 삭제</button>'
             cards.append(f"""
             <div class="img-card" style="text-align:center;margin:6px;">
               {img_tag}
@@ -903,7 +902,7 @@ document.querySelectorAll('.del-btn').forEach(function(btn) {{
     btn.disabled = true;
     btn.textContent = '...';
     try {{
-      var r = await fetch('http://localhost:7474/api/delete', {{
+      var r = await fetch('/api/delete', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify({{path: path}})

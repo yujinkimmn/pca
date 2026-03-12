@@ -510,6 +510,8 @@ def parse_args():
                         help="분석 결과를 저장할 JSON 파일 경로")
     common.add_argument("--save_html", type=str, default=None, metavar="PATH",
                         help="HTML 시각화를 저장할 경로 (갤러리 + 인터랙티브 scatter)")
+    common.add_argument("--thumb", type=int, default=320,
+                        help="갤러리 썸네일 크기 px (기본값: 320)")
 
     # --- analyze ---
     p_analyze = sub.add_parser("analyze", parents=[common],
@@ -618,7 +620,7 @@ def main():
                 plot_gallery(
                     gallery_paths, labels, group_meta, args.save_html,
                     data_dir_label, args.n_components, args.hamming_threshold,
-                    coords=coords,
+                    thumb=args.thumb, coords=coords,
                 )
             except ImportError as e:
                 print(f"  [경고] HTML 생성 실패: {e}")
@@ -707,7 +709,7 @@ def main():
             plot_gallery(
                 valid_paths, labels, group_meta, args.save_html,
                 data_dir_label, args.n_components, args.hamming_threshold,
-                coords=coords,
+                thumb=args.thumb, coords=coords,
             )
             plot_interactive(
                 coords, labels, group_meta, valid_paths, args.save_html,

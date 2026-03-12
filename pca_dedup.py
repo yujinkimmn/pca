@@ -442,6 +442,8 @@ def parse_args():
                         help="MD5 정확한 중복 탐지 건너뜀")
     common.add_argument("--report", type=str, default=None,
                         help="분석 결과를 저장할 JSON 파일 경로")
+    common.add_argument("--save_html", type=str, default=None, metavar="PATH",
+                        help="HTML 시각화를 저장할 경로 (갤러리 + 인터랙티브 scatter)")
 
     # --- analyze ---
     p_analyze = sub.add_parser("analyze", parents=[common],
@@ -550,6 +552,27 @@ def main():
         }
         Path(args.report).write_text(json.dumps(report_data, ensure_ascii=False, indent=2))
         print(f"  보고서 저장: {args.report}")
+
+    if args.save_html:
+        try:
+            from visualize_dedup import embed_2d, build_labels, plot_gallery, plot_interactive
+            print("\n[HTML 시각화 생성 중...]")
+            coords = embed_2d(features, "pca")
+            labels, group_meta = build_labels(
+                len(valid_paths), exact_groups, near_groups, valid_paths
+            )
+            data_dir_label = ", ".join(str(d) for d in args.data_dir)
+            plot_gallery(
+                valid_paths, labels, group_meta, args.save_html,
+                data_dir_label, args.n_components, args.hamming_threshold,
+                coords=coords,
+            )
+            plot_interactive(
+                coords, labels, group_meta, valid_paths, args.save_html,
+                "pca", data_dir_label, args.n_components, args.hamming_threshold,
+            )
+        except ImportError as e:
+            print(f"  [경고] HTML 생성 실패 (visualize_dedup.py 필요): {e}")
 
     # -----------------------------------------------------------------------
     # 5. 중복 제거 (deduplicate 모드만)

@@ -12,6 +12,7 @@ PCA Hash Deduplication - 논문용 시각화
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -626,7 +627,7 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
         print("  [경고] Pillow 미설치. 갤러리 생성 불가.")
         return
 
-    import base64, io, json as _json
+    import base64, io, json as _json, html as _html
 
     def encode(path):
         try:
@@ -667,14 +668,14 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
             name = valid_paths[idx].name
             keep = "KEEP" if rank == 0 else "REMOVE"
             keep_color = "#27ae60" if rank == 0 else "#e74c3c"
-            path_json = _json.dumps(str(valid_paths[idx].resolve()), ensure_ascii=False)
+            path_attr = _html.escape(os.path.abspath(str(valid_paths[idx])), quote=True)
             img_tag = (f'<img src="data:image/jpeg;base64,{b64}" '
                        f'style="width:{thumb}px;height:{thumb}px;'
                        f'object-fit:cover;border-radius:6px;">' if b64 else
                        f'<div style="width:{thumb}px;height:{thumb}px;'
                        f'background:#eee;border-radius:6px;display:flex;'
                        f'align-items:center;justify-content:center;color:#aaa;">no img</div>')
-            del_btn = f'<button class="del-btn" data-path={path_json}>🗑 삭제</button>'
+            del_btn = f'<button class="del-btn" data-path="{path_attr}">🗑 삭제</button>'
             cards.append(f"""
             <div class="img-card" style="text-align:center;margin:6px;">
               {img_tag}
@@ -966,7 +967,7 @@ def run_server(html_path: str, port: int = 7474) -> None:
                 body = self.rfile.read(length)
                 try:
                     data = _json.loads(body)
-                    target = Path(data['path']).resolve()
+                    target = Path(data['path'])
                     if not target.is_file():
                         self._json(404, {'error': 'File not found'})
                         return

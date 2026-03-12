@@ -431,22 +431,26 @@ def cross_deduplicate(
     source_hashes = hashes[:n_source]
     ref_hashes = hashes[n_source:]
     source_valid = valid_paths[:n_source]
+    ref_valid = valid_paths[n_source:]
 
     # source vs ref Hamming distance
     s = source_hashes.astype(np.uint8)
     r = ref_hashes.astype(np.uint8)
 
-    to_remove = set()
+    to_remove: set[Path] = set()
+    cross_pairs: list[tuple[Path, Path]] = []  # (source, best_matching_ref)
     chunk = 500
     for i in tqdm(range(0, len(s), chunk), desc="Cross-dup 탐지", ncols=80):
-        s_chunk = s[i : i + chunk]  # (chunk, bits)
-        # (chunk, n_ref, bits)
+        s_chunk = s[i : i + chunk]
         xor = s_chunk[:, np.newaxis, :] ^ r[np.newaxis, :, :]
         dists = xor.sum(axis=2)  # (chunk, n_ref)
-        matches = np.any(dists <= threshold, axis=1)
-        for local_idx, is_match in enumerate(matches):
-            if is_match:
-                to_remove.add(source_valid[i + local_idx])
+        for local_idx in range(len(s_chunk)):
+            row = dists[local_idx]
+            if row.min() <= threshold:
+                src = source_valid[i + local_idx]
+                best_ref = ref_valid[int(row.argmin())]
+                to_remove.add(src)
+                cross_pairs.append((src, best_ref))
 
     print(f"\n  Ref와 유사한 Source 이미지 수: {len(to_remove):,} / {len(source_valid):,}")
     if to_remove and not dry_run:
@@ -457,7 +461,7 @@ def cross_deduplicate(
         for p in sorted(to_remove)[:10]:
             print(f"    - {p}")
 
-    return len(to_remove)
+    return len(to_remove), cross_pairs
 
 
 # ---------------------------------------------------------------------------
@@ -547,15 +551,66 @@ def main():
         return
 
     if args.mode == "cross":
-        removed = cross_deduplicate(
+        removed, cross_pairs = cross_deduplicate(
             source_dir=args.data_dir,
             ref_dir=args.ref_dir,
             n_components=args.n_components,
             image_size=args.image_size,
             threshold=args.hamming_threshold,
-            dry_run=getattr(args, "dry_run", True),
+            dry_run=getattr(args, "dry_run", False),
         )
         print(f"\n  완료: {removed}장 제거됨  ({time.time()-start_time:.1f}s)")
+
+        if args.report:
+            report_data = {
+                "mode": "cross",
+                "source_dir": str(args.data_dir),
+                "ref_dir": args.ref_dir,
+                "n_components": args.n_components,
+                "hamming_threshold": args.hamming_threshold,
+                "matched_count": removed,
+                "cross_pairs": [[str(s), str(r)] for s, r in cross_pairs],
+            }
+            Path(args.report).write_text(
+                json.dumps(report_data, ensure_ascii=False, indent=2)
+            )
+            print(f"  보고서 저장: {args.report}")
+
+        if args.save_html and cross_pairs:
+            Path(args.save_html).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                from visualize_dedup import plot_gallery
+                # source+ref 쌍을 near_groups로 구성해 갤러리 생성
+                # valid_paths = [src0, ref0, src1, ref1, ...]
+                gallery_paths: list[Path] = []
+                near_groups: list[list[int]] = []
+                seen: dict[Path, int] = {}
+
+                def _idx(p: Path) -> int:
+                    if p not in seen:
+                        seen[p] = len(gallery_paths)
+                        gallery_paths.append(p)
+                    return seen[p]
+
+                for src, ref in cross_pairs:
+                    near_groups.append([_idx(src), _idx(ref)])
+
+                labels = np.full(len(gallery_paths), -1, dtype=int)
+                group_meta: dict[int, dict] = {}
+                for gid, grp in enumerate(near_groups):
+                    for idx in grp:
+                        labels[idx] = gid
+                    group_meta[gid] = {"type": "near", "size": len(grp)}
+
+                data_dir_label = f"{args.data_dir} ↔ {args.ref_dir}"
+                print("\n[HTML 시각화 생성 중...]")
+                plot_gallery(
+                    gallery_paths, labels, group_meta, args.save_html,
+                    data_dir_label, args.n_components, args.hamming_threshold,
+                )
+            except ImportError as e:
+                print(f"  [경고] HTML 생성 실패: {e}")
+
         return
 
     # -----------------------------------------------------------------------

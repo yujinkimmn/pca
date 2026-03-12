@@ -464,7 +464,7 @@ def cross_deduplicate(
         for p in sorted(to_remove)[:10]:
             print(f"    - {p}")
 
-    return len(to_remove), cross_pairs
+    return len(to_remove), cross_pairs, features, valid_paths
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +554,7 @@ def main():
         return
 
     if args.mode == "cross":
-        removed, cross_pairs = cross_deduplicate(
+        removed, cross_pairs, cross_features, cross_valid = cross_deduplicate(
             source_dir=args.data_dir,
             ref_dir=args.ref_dir,
             n_components=args.n_components,
@@ -583,9 +583,7 @@ def main():
         if args.save_html and cross_pairs:
             Path(args.save_html).parent.mkdir(parents=True, exist_ok=True)
             try:
-                from visualize_dedup import plot_gallery
-                # source+ref 쌍을 near_groups로 구성해 갤러리 생성
-                # valid_paths = [src0, ref0, src1, ref1, ...]
+                from visualize_dedup import embed_2d, plot_gallery
                 gallery_paths: list[Path] = []
                 near_groups: list[list[int]] = []
                 seen: dict[Path, int] = {}
@@ -606,11 +604,18 @@ def main():
                         labels[idx] = gid
                     group_meta[gid] = {"type": "near", "size": len(grp)}
 
+                path_to_idx = {p: i for i, p in enumerate(cross_valid)}
+                gallery_features = np.stack([
+                    cross_features[path_to_idx[p]] for p in gallery_paths
+                ])
+                coords = embed_2d(gallery_features, "pca")
+
                 data_dir_label = f"{args.data_dir} ↔ {args.ref_dir}"
                 print("\n[HTML 시각화 생성 중...]")
                 plot_gallery(
                     gallery_paths, labels, group_meta, args.save_html,
                     data_dir_label, args.n_components, args.hamming_threshold,
+                    coords=coords,
                 )
             except ImportError as e:
                 print(f"  [경고] HTML 생성 실패: {e}")

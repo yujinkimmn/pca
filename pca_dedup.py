@@ -79,16 +79,66 @@ def md5_exact_duplicates(paths: list[Path]) -> dict[str, list[Path]]:
 # ---------------------------------------------------------------------------
 # PCA Hash 기반 near-duplicate 탐지
 # ---------------------------------------------------------------------------
+def _feature_cache_key(paths: list[Path], image_size: int) -> str:
+    """파일 경로 + mtime + size + image_size 를 MD5로 요약한 캐시 키."""
+    h = hashlib.md5()
+    h.update(f"image_size={image_size}\n".encode())
+    for p in sorted(paths):
+        try:
+            st = p.stat()
+            h.update(f"{p}|{st.st_mtime}|{st.st_size}\n".encode())
+        except OSError:
+            h.update(f"{p}|missing\n".encode())
+    return h.hexdigest()
+
+
+def load_feature_cache(
+    cache_dir: Path, cache_key: str
+) -> tuple[np.ndarray, list[Path]] | None:
+    """캐시가 존재하면 (features, valid_paths)를 반환, 없으면 None."""
+    cache_file = cache_dir / f"{cache_key}.npz"
+    if not cache_file.exists():
+        return None
+    data = np.load(cache_file, allow_pickle=False)
+    features = data["features"]
+    valid_paths = [Path(p) for p in data["valid_paths"]]
+    return features, valid_paths
+
+
+def save_feature_cache(
+    cache_dir: Path, cache_key: str,
+    features: np.ndarray, valid_paths: list[Path],
+) -> None:
+    """features와 valid_paths를 .npz 파일로 캐시에 저장."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{cache_key}.npz"
+    np.savez_compressed(
+        cache_file,
+        features=features,
+        valid_paths=np.array([str(p) for p in valid_paths]),
+    )
+
+
 def extract_features(
     paths: list[Path],
     image_size: int,
+    cache_dir: Path | None = None,
 ) -> tuple[np.ndarray, list[Path]]:
     """
     유효하게 로드된 이미지들의 픽셀 특징 행렬과 대응하는 경로 목록을 반환합니다.
+    cache_dir 가 지정되면 결과를 캐시에 저장하고 다음 호출 시 재사용합니다.
     Returns:
         features: (N, D) float32 배열
         valid_paths: 로드에 성공한 경로 목록 (N개)
     """
+    if cache_dir is not None:
+        key = _feature_cache_key(paths, image_size)
+        cached = load_feature_cache(cache_dir, key)
+        if cached is not None:
+            features, valid_paths = cached
+            print(f"  [캐시 HIT] {len(valid_paths):,}장 로드 ({cache_dir / (key[:8] + '...')}.npz)")
+            return features, valid_paths
+
     vectors = []
     valid_paths = []
     for p in tqdm(paths, desc="이미지 특징 추출", ncols=80):
@@ -97,6 +147,11 @@ def extract_features(
             vectors.append(vec)
             valid_paths.append(p)
     features = np.stack(vectors, axis=0)  # (N, D)
+
+    if cache_dir is not None:
+        save_feature_cache(cache_dir, key, features, valid_paths)
+        print(f"  [캐시 저장] {cache_dir / (key[:8] + '...')}.npz")
+
     return features, valid_paths
 
 
@@ -440,6 +495,9 @@ def parse_args():
                         help="특징 추출 시 리사이즈할 이미지 크기 (기본값: 64)")
     common.add_argument("--no_exact", action="store_true",
                         help="MD5 정확한 중복 탐지 건너뜀")
+    common.add_argument("--cache_dir", type=str,
+                        default=str(Path.home() / ".cache" / "pca_dedup"),
+                        help="특징 벡터 캐시 디렉토리 (기본값: ~/.cache/pca_dedup)")
     common.add_argument("--report", type=str, default=None,
                         help="분석 결과를 저장할 JSON 파일 경로")
     common.add_argument("--save_html", type=str, default=None, metavar="PATH",
@@ -513,7 +571,9 @@ def main():
           f"해시 비트: {args.n_components}, "
           f"Hamming 임계값: {args.hamming_threshold}")
 
-    features, valid_paths = extract_features(paths, args.image_size)
+    features, valid_paths = extract_features(
+        paths, args.image_size, cache_dir=Path(args.cache_dir)
+    )
     print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
 
     hashes, pca_model = compute_pca_hashes(features, args.n_components)

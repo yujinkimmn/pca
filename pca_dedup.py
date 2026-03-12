@@ -493,7 +493,7 @@ def parse_args():
 
     # --- 공통 인자 ---
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data_dir", required=True, action="append",
+    common.add_argument("--data_dir", action="append", default=None,
                         help="이미지 데이터셋 디렉토리 (여러 개: --data_dir ./a --data_dir ./b)")
     common.add_argument("--n_components", type=int, default=32,
                         help="PCA 성분 수 (해시 비트 수). 클수록 정밀 (기본값: 32)")
@@ -541,7 +541,10 @@ def parse_args():
     p_serve.add_argument("--port", type=int, default=7474,
                          help="서버 포트 (기본값: 7474)")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if getattr(args, "data_dir", None) is None and args.mode != "serve":
+        parser.error("--data_dir 를 하나 이상 지정해야 합니다.")
+    return args
 
 
 def main():

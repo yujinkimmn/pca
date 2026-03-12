@@ -409,6 +409,7 @@ def cross_deduplicate(
     image_size: int,
     threshold: int,
     dry_run: bool,
+    cache_dir: Optional[Path] = None,
 ):
     """
     source_dir의 이미지 중 ref_dir와 유사한 것들을 탐지합니다.
@@ -424,7 +425,7 @@ def cross_deduplicate(
     print(f"  Ref 이미지 수   : {len(ref_paths):,}")
 
     all_paths_list = source_paths + ref_paths
-    features, valid_paths = extract_features(all_paths_list, image_size)
+    features, valid_paths = extract_features(all_paths_list, image_size, cache_dir=cache_dir)
     hashes, _ = compute_pca_hashes(features, n_components)
 
     n_source = sum(1 for p in valid_paths if p in set(source_paths))
@@ -558,6 +559,7 @@ def main():
             image_size=args.image_size,
             threshold=args.hamming_threshold,
             dry_run=getattr(args, "dry_run", False),
+            cache_dir=Path(args.cache_dir),
         )
         print(f"\n  완료: {removed}장 제거됨  ({time.time()-start_time:.1f}s)")
 

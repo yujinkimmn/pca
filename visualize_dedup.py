@@ -68,7 +68,8 @@ UNIQUE_COLOR = "#BBBBBB"
 def _group_color(gid: int, n_groups: int) -> str:
     if n_groups <= len(OKABE_ITO):
         return OKABE_ITO[gid % len(OKABE_ITO)]
-    return plt.get_cmap("tab20")(gid / max(n_groups, 1))
+    r, g, b, _ = plt.get_cmap("tab20")(gid / max(n_groups, 1))
+    return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
 
 
 # ---------------------------------------------------------------------------

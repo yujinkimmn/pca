@@ -526,12 +526,25 @@ def parse_args():
     p_cross.add_argument("--dry_run", action="store_true",
                          help="실제 파일 작업 없이 시뮬레이션만 수행")
 
+    # --- serve ---
+    p_serve = sub.add_parser("serve",
+                              help="갤러리 HTML을 서빙하고 삭제 버튼을 활성화하는 로컬 서버 실행")
+    p_serve.add_argument("--html", required=True,
+                         help="서빙할 갤러리 HTML 파일 경로")
+    p_serve.add_argument("--port", type=int, default=7474,
+                         help="서버 포트 (기본값: 7474)")
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     start_time = time.time()
+
+    if args.mode == "serve":
+        from visualize_dedup import run_server
+        run_server(args.html, port=args.port)
+        return
 
     if args.mode == "cross":
         removed = cross_deduplicate(

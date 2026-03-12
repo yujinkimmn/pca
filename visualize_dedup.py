@@ -626,7 +626,7 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
         print("  [경고] Pillow 미설치. 갤러리 생성 불가.")
         return
 
-    import base64, io
+    import base64, io, json as _json
 
     def encode(path):
         try:
@@ -667,19 +667,23 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
             name = valid_paths[idx].name
             keep = "KEEP" if rank == 0 else "REMOVE"
             keep_color = "#27ae60" if rank == 0 else "#e74c3c"
+            path_json = _json.dumps(str(valid_paths[idx]))
             img_tag = (f'<img src="data:image/jpeg;base64,{b64}" '
                        f'style="width:{thumb}px;height:{thumb}px;'
                        f'object-fit:cover;border-radius:6px;">' if b64 else
                        f'<div style="width:{thumb}px;height:{thumb}px;'
                        f'background:#eee;border-radius:6px;display:flex;'
                        f'align-items:center;justify-content:center;color:#aaa;">no img</div>')
+            del_btn = (f'<button class="del-btn" data-path={path_json}>🗑 삭제</button>'
+                       if rank != 0 else '')
             cards.append(f"""
-            <div style="text-align:center;margin:6px;">
+            <div class="img-card" style="text-align:center;margin:6px;">
               {img_tag}
               <div style="font-size:11px;color:#555;margin-top:4px;
                           max-width:{thumb}px;word-break:break-all;">{name}</div>
               <div style="font-size:10px;font-weight:bold;color:{keep_color};
                           margin-top:2px;">{keep}</div>
+              {del_btn}
             </div>""")
 
         group_sections.append(f"""
@@ -849,6 +853,14 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
     h1 {{ margin: 0 0 4px; font-size: 20px; color: #1a1a2e; }}
     h2 {{ font-size: 15px; color: #444; margin: 0 0 14px; font-weight: 600; }}
     .params {{ font-size: 12px; color: #999; margin-top: 6px; }}
+    .del-btn {{ background:#e74c3c;color:white;border:none;border-radius:4px;
+                padding:3px 10px;font-size:10px;cursor:pointer;margin-top:5px; }}
+    .del-btn:hover {{ background:#c0392b; }}
+    .del-btn:disabled {{ background:#aaa;cursor:not-allowed; }}
+    .card-deleted {{ opacity:0.3;pointer-events:none; }}
+    .server-note {{ background:#fff8e1;border:1px solid #ffe082;border-radius:6px;
+                    padding:7px 12px;margin-top:12px;font-size:12px;color:#795548; }}
+    .server-note code {{ background:#f5f5f5;padding:1px 5px;border-radius:3px;font-size:11px; }}
   </style>
 </head>
 <body>
@@ -857,6 +869,11 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
     <h1>Image Deduplication Gallery</h1>
     <div class="params">Dataset: <b>{Path(data_dir).name}</b> &nbsp;|&nbsp;
       PCA hash bits = {n_components} &nbsp;|&nbsp; Hamming threshold = {threshold}</div>
+    <div class="server-note">
+      🗑 삭제 버튼을 활성화하려면 아래 명령어로 서버를 실행하세요:<br>
+      <code>python pca_dedup.py serve --html &lt;이 파일 경로&gt;</code>
+      &nbsp;→ 브라우저에서 <code>http://localhost:7474</code> 를 열면 됩니다.
+    </div>
     <div class="stat-grid">
       <div class="stat"><div class="stat-val">{len(valid_paths)}</div>
         <div class="stat-lbl">Total images</div></div>
@@ -878,12 +895,111 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
   <h2 style="margin-top:28px;">Unique Images</h2>
   {unique_section}
 </div>
+<script>
+document.querySelectorAll('.del-btn').forEach(function(btn) {{
+  btn.addEventListener('click', async function() {{
+    var path = btn.dataset.path;
+    if (!confirm('이 파일을 삭제하시겠습니까?\\n' + path)) return;
+    btn.disabled = true;
+    btn.textContent = '...';
+    try {{
+      var r = await fetch('http://localhost:7474/api/delete', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{path: path}})
+      }});
+      var d = await r.json();
+      if (r.ok) {{
+        btn.closest('.img-card').classList.add('card-deleted');
+        btn.textContent = '✓ 삭제됨';
+      }} else {{
+        btn.textContent = '✗ 오류';
+        btn.disabled = false;
+        alert('오류: ' + d.error);
+      }}
+    }} catch(e) {{
+      btn.textContent = '✗ 서버 없음';
+      btn.disabled = false;
+      alert('서버가 실행되어 있지 않습니다.\\n\\n아래 명령어로 먼저 서버를 실행하세요:\\npython pca_dedup.py serve --html <이 파일 경로>\\n\\n그 다음 http://localhost:7474 에서 열어주세요.');
+    }}
+  }});
+}});
+</script>
 </body>
 </html>"""
 
     out = Path(output_path).with_suffix(".html")
     out.write_text(html, encoding="utf-8")
     print(f"Gallery HTML 저장: {out.resolve()}")
+
+
+# ---------------------------------------------------------------------------
+# 삭제 서버
+# ---------------------------------------------------------------------------
+
+def run_server(html_path: str, port: int = 7474) -> None:
+    """
+    HTML 갤러리를 서빙하고 파일 삭제 API를 제공하는 로컬 서버.
+
+    GET  /            → HTML 파일 반환
+    POST /api/delete  → {"path": "/abs/path/to/file"} → 파일 삭제
+    """
+    import http.server
+    import json as _json
+
+    html_bytes = Path(html_path).read_bytes()
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path in ('/', '/index.html'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', len(html_bytes))
+                self.end_headers()
+                self.wfile.write(html_bytes)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self):
+            if self.path == '/api/delete':
+                length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(length)
+                try:
+                    data = _json.loads(body)
+                    target = Path(data['path']).resolve()
+                    if not target.is_file():
+                        self._json(404, {'error': 'File not found'})
+                        return
+                    target.unlink()
+                    print(f"  [삭제] {target}")
+                    self._json(200, {'ok': True})
+                except Exception as e:
+                    self._json(500, {'error': str(e)})
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def _json(self, code: int, data: dict) -> None:
+            body = _json.dumps(data).encode()
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Length', len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):  # 기본 로그 억제
+            pass
+
+    server = http.server.HTTPServer(('localhost', port), _Handler)
+    print(f"\n  갤러리 서버 실행 중: http://localhost:{port}")
+    print(f"  브라우저에서 위 주소를 열면 삭제 버튼이 활성화됩니다.")
+    print(f"  종료: Ctrl+C\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  서버 종료.")
 
 
 # ---------------------------------------------------------------------------

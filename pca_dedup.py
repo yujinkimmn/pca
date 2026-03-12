@@ -541,7 +541,20 @@ def parse_args():
     p_serve.add_argument("--port", type=int, default=7474,
                          help="서버 포트 (기본값: 7474)")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # argparse nargs="+" 버그 보정:
+    # "--data_dir path1 path2 --dry_run" 형태에서 --dry_run이 data_dir 리스트에
+    # 포함될 수 있음. 플래그처럼 생긴 값을 꺼내 직접 적용.
+    if hasattr(args, "data_dir") and args.data_dir:
+        consumed = [a for a in args.data_dir if a.startswith("-")]
+        args.data_dir = [a for a in args.data_dir if not a.startswith("-")]
+        for flag in consumed:
+            attr = flag.lstrip("-")
+            if hasattr(args, attr):
+                setattr(args, attr, True)
+
+    return args
 
 
 def main():

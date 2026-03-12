@@ -493,8 +493,8 @@ def parse_args():
 
     # --- 공통 인자 ---
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--data_dir", required=True, nargs="+",
-                        help="이미지 데이터셋 디렉토리 (여러 개 지정 가능)")
+    common.add_argument("--data_dir", required=True, action="append",
+                        help="이미지 데이터셋 디렉토리 (여러 개: --data_dir ./a --data_dir ./b)")
     common.add_argument("--n_components", type=int, default=32,
                         help="PCA 성분 수 (해시 비트 수). 클수록 정밀 (기본값: 32)")
     common.add_argument("--hamming_threshold", type=int, default=2,
@@ -541,20 +541,7 @@ def parse_args():
     p_serve.add_argument("--port", type=int, default=7474,
                          help="서버 포트 (기본값: 7474)")
 
-    args = parser.parse_args()
-
-    # argparse nargs="+" 버그 보정:
-    # "--data_dir path1 path2 --dry_run" 형태에서 --dry_run이 data_dir 리스트에
-    # 포함될 수 있음. 플래그처럼 생긴 값을 꺼내 직접 적용.
-    if hasattr(args, "data_dir") and args.data_dir:
-        consumed = [a for a in args.data_dir if a.startswith("-")]
-        args.data_dir = [a for a in args.data_dir if not a.startswith("-")]
-        for flag in consumed:
-            attr = flag.lstrip("-")
-            if hasattr(args, attr):
-                setattr(args, attr, True)
-
-    return args
+    return parser.parse_args()
 
 
 def main():

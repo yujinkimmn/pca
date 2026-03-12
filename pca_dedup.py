@@ -428,11 +428,13 @@ def cross_deduplicate(
     features, valid_paths = extract_features(all_paths_list, image_size, cache_dir=cache_dir)
     hashes, _ = compute_pca_hashes(features, n_components)
 
-    n_source = sum(1 for p in valid_paths if p in set(source_paths))
-    source_hashes = hashes[:n_source]
-    ref_hashes = hashes[n_source:]
-    source_valid = valid_paths[:n_source]
-    ref_valid = valid_paths[n_source:]
+    source_set = set(source_paths)
+    source_idxs = [i for i, p in enumerate(valid_paths) if p in source_set]
+    ref_idxs    = [i for i, p in enumerate(valid_paths) if p not in source_set]
+    source_hashes = hashes[source_idxs]
+    ref_hashes    = hashes[ref_idxs]
+    source_valid  = [valid_paths[i] for i in source_idxs]
+    ref_valid     = [valid_paths[i] for i in ref_idxs]
 
     # source vs ref Hamming distance
     s = source_hashes.astype(np.uint8)

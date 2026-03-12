@@ -554,6 +554,7 @@ def main():
         print(f"  보고서 저장: {args.report}")
 
     if args.save_html:
+        Path(args.save_html).parent.mkdir(parents=True, exist_ok=True)
         try:
             from visualize_dedup import embed_2d, build_labels, plot_gallery, plot_interactive
             print("\n[HTML 시각화 생성 중...]")

@@ -55,6 +55,7 @@ def load_image_as_vector(path: Path, image_size: int) -> Optional[np.ndarray]:
         img = Image.open(path).convert("RGB")
         img = img.resize((image_size, image_size), Image.BILINEAR)
         arr = np.asarray(img, dtype=np.float32).ravel()
+        arr /= 255.0
         return arr
     except Exception as e:
         print(f"  [경고] 이미지 로드 실패 ({path}): {e}", file=sys.stderr)
@@ -82,7 +83,7 @@ def md5_exact_duplicates(paths: list[Path]) -> dict[str, list[Path]]:
 def _feature_cache_key(paths: list[Path], image_size: int) -> str:
     """파일 경로 + mtime + size + image_size 를 MD5로 요약한 캐시 키."""
     h = hashlib.md5()
-    h.update(f"image_size={image_size}\n".encode())
+    h.update(f"image_size={image_size},norm=255\n".encode())
     for p in sorted(paths):
         try:
             st = p.stat()

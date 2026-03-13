@@ -3,3 +3,6 @@ Pillow>=10.0
 scikit-learn>=1.3
 scipy>=1.11
 tqdm>=4.65
+
+# sscd_dedup.py 전용 (선택)
+# pip install torch torchvision

@@ -979,13 +979,16 @@ def run_server(html_path: str, port: int = 7474, action: str = "move") -> None:
             if self.path == '/api/delete':
                 length = int(self.headers.get('Content-Length', 0))
                 body = self.rfile.read(length)
+                print(f"  [요청] /api/delete body={body[:200]}", flush=True)
                 try:
                     data = _json.loads(body)
                     target = Path(data['path'])
+                    print(f"  [대상] {target} | exists={target.exists()} is_file={target.is_file()}", flush=True)
                     if not target.is_file():
                         self._json(404, {'error': 'File not found'})
                         return
                     ts = datetime.datetime.now().isoformat(timespec='seconds')
+                    print(f"  [액션] action={action}", flush=True)
                     if action == "move":
                         removed_dir = target.parent / "removed"
                         removed_dir.mkdir(parents=True, exist_ok=True)

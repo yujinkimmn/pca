@@ -2,14 +2,13 @@
 SSCD Copy Detection Deduplication
 ==================================
 Facebook Research의 SSCD(Self-Supervised Copy Detection) 모델을 사용해
-이미지 데이터셋의 중복·유사 이미지를 탐지하고 제거합니다.
+이미지 데이터셋의 유사 복사본을 탐지하고 제거합니다.
 
 알고리즘:
   1. SSCD TorchScript 모델로 이미지당 512차원 임베딩 추출 (L2 정규화)
   2. 코사인 유사도(= dot product) 행렬 계산
-  3. 임계값 이상인 쌍을 Union-Find로 그룹화 → near-duplicate 탐지
-  4. MD5 해시로 바이트 완전 동일한 exact-duplicate 탐지 (선택)
-  5. 중복 그룹 중 대표 이미지 1장만 남기고 나머지 제거/이동
+  3. 임계값 이상인 쌍을 Union-Find로 그룹화
+  4. 중복 그룹 중 대표 이미지 1장만 남기고 나머지 제거/이동
 
 모델:
   sscd_disc_mixup  - DISC 데이터셋으로 학습, 복사 탐지에 최적화 (기본값)
@@ -67,60 +66,6 @@ def collect_image_paths(data_dir) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# MD5 기반 exact-duplicate 탐지 (pca_dedup.py와 동일 로직)
-# ---------------------------------------------------------------------------
-def _load_md5_cache(cache_dir: Path) -> dict[str, tuple[float, int, str]]:
-    cache_file = cache_dir / "md5_cache.json"
-    if cache_file.exists():
-        try:
-            data = json.loads(cache_file.read_text(encoding="utf-8"))
-            return {k: tuple(v) for k, v in data.items()}
-        except Exception:
-            pass
-    return {}
-
-
-def _save_md5_cache(cache_dir: Path, cache: dict[str, tuple[float, int, str]]) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / "md5_cache.json"
-    cache_file.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-
-
-def md5_exact_duplicates(
-    paths: list[Path],
-    cache_dir: Optional[Path] = None,
-) -> dict[str, list[Path]]:
-    """MD5 해시로 바이트 단위 완전 동일 파일을 그룹화합니다."""
-    md5_cache: dict[str, tuple[float, int, str]] = {}
-    if cache_dir is not None:
-        md5_cache = _load_md5_cache(cache_dir)
-
-    hash_to_paths: dict[str, list[Path]] = defaultdict(list)
-    cache_updated = False
-
-    for p in tqdm(paths, desc="MD5 exact-dup scan", ncols=80):
-        try:
-            st = p.stat()
-            key = str(p)
-            cached = md5_cache.get(key)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                h = cached[2]
-            else:
-                h = hashlib.md5(p.read_bytes()).hexdigest()
-                md5_cache[key] = (st.st_mtime, st.st_size, h)
-                cache_updated = True
-            hash_to_paths[h].append(p)
-        except Exception as e:
-            print(f"  [경고] MD5 계산 실패 ({p}): {e}", file=sys.stderr)
-
-    if cache_dir is not None and cache_updated:
-        _save_md5_cache(cache_dir, md5_cache)
-        print(f"  [MD5 캐시 저장] {cache_dir / 'md5_cache.json'}")
-
-    return {h: ps for h, ps in hash_to_paths.items() if len(ps) > 1}
-
-
-# ---------------------------------------------------------------------------
 # SSCD 특징 추출
 # ---------------------------------------------------------------------------
 def _sscd_cache_key(paths: list[Path], model_name: str) -> str:
@@ -136,9 +81,7 @@ def _sscd_cache_key(paths: list[Path], model_name: str) -> str:
     return h.hexdigest()
 
 
-def _load_feature_cache(
-    cache_dir: Path, key: str
-) -> tuple[np.ndarray, list[Path]] | None:
+def _load_feature_cache(cache_dir: Path, key: str) -> tuple[np.ndarray, list[Path]] | None:
     cache_file = cache_dir / f"{key}.npz"
     if not cache_file.exists():
         return None
@@ -169,7 +112,7 @@ def extract_sscd_features(
 
     Args:
         paths: 이미지 경로 목록
-        model_name: 사용할 SSCD 모델 이름 (sscd_disc_mixup / sscd_disc_large)
+        model_name: 사용할 SSCD 모델 이름
         cache_dir: 캐시 디렉토리
         batch_size: 배치 크기 (GPU 메모리에 맞게 조절)
 
@@ -189,7 +132,6 @@ def extract_sscd_features(
     model_dir = cache_dir if cache_dir is not None else Path.home() / ".cache" / "pca_dedup"
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    # 캐시 확인
     if cache_dir is not None:
         key = _sscd_cache_key(paths, model_name)
         cached = _load_feature_cache(cache_dir, key)
@@ -198,7 +140,6 @@ def extract_sscd_features(
             print(f"  [SSCD 캐시 HIT] {len(valid):,}장 로드 ({cache_dir / (key[:8] + '...')}.npz)")
             return feats, valid
 
-    # 모델 다운로드/로드
     model_url = SSCD_MODELS.get(model_name)
     if model_url is None:
         raise ValueError(f"알 수 없는 모델: {model_name}. 사용 가능: {list(SSCD_MODELS)}")
@@ -239,8 +180,8 @@ def extract_sscd_features(
             continue
         with torch.no_grad():
             x = torch.stack(tensors).to(device)
-            feat = model(x)                          # (B, 512)
-            feat = feat / feat.norm(dim=1, keepdim=True)   # L2 normalize
+            feat = model(x)                                # (B, 512)
+            feat = feat / feat.norm(dim=1, keepdim=True)  # L2 normalize
         all_features.append(feat.cpu().numpy())
         valid_paths.extend(batch_valid)
 
@@ -257,7 +198,7 @@ def extract_sscd_features(
 
 
 # ---------------------------------------------------------------------------
-# 코사인 유사도 기반 near-duplicate 그룹 탐지
+# 코사인 유사도 기반 중복 그룹 탐지
 # ---------------------------------------------------------------------------
 def find_cosine_duplicate_groups(
     features: np.ndarray,
@@ -311,21 +252,17 @@ def find_cosine_duplicate_groups(
 # ---------------------------------------------------------------------------
 def print_report(
     total: int,
-    exact_groups: dict[str, list[Path]],
-    near_groups: list[list[int]],
-    near_paths: list[Path],
+    dup_groups: list[list[int]],
+    valid_paths: list[Path],
     model_name: str,
     threshold: float,
 ) -> dict:
     """분석 결과를 출력하고 요약 dict를 반환합니다."""
-    exact_dup_count = sum(len(v) - 1 for v in exact_groups.values())
-    exact_group_count = len(exact_groups)
-
-    near_dup_images = set()
-    for g in near_groups:
+    dup_images = set()
+    for g in dup_groups:
         for idx in g[1:]:
-            near_dup_images.add(near_paths[idx])
-    near_dup_count = len(near_dup_images)
+            dup_images.add(valid_paths[idx])
+    removable_count = len(dup_images)
 
     separator = "=" * 60
 
@@ -336,33 +273,20 @@ def print_report(
     print(f"  SSCD 모델               : {model_name}")
     print(f"  코사인 유사도 임계값    : {threshold}")
     print()
-    print(f"  [정확한 중복 (MD5)]")
-    print(f"    중복 그룹 수          : {exact_group_count:,}")
-    print(f"    제거 가능 이미지 수   : {exact_dup_count:,}")
-    print()
     print(f"  [유사 중복 (SSCD Cosine)]")
-    print(f"    중복 그룹 수          : {len(near_groups):,}")
-    print(f"    제거 가능 이미지 수   : {near_dup_count:,}")
+    print(f"    중복 그룹 수          : {len(dup_groups):,}")
+    print(f"    제거 가능 이미지 수   : {removable_count:,}")
     print()
-
-    total_removable = exact_dup_count + near_dup_count
-    print(f"  총 제거 가능 이미지 수  : {total_removable:,}  ({total_removable/max(total,1)*100:.1f}%)")
-    print(f"  중복 제거 후 예상 수    : {total - total_removable:,}")
+    print(f"  총 제거 가능 이미지 수  : {removable_count:,}  ({removable_count/max(total,1)*100:.1f}%)")
+    print(f"  중복 제거 후 예상 수    : {total - removable_count:,}")
     print(separator)
 
-    if exact_groups:
-        print("\n  [정확한 중복 그룹 예시 (상위 5개)]")
-        for i, (h, ps) in enumerate(list(exact_groups.items())[:5]):
-            print(f"    그룹 {i+1} ({len(ps)}장):")
-            for p in ps:
-                print(f"      - {p}")
-
-    if near_groups:
+    if dup_groups:
         print("\n  [유사 중복 그룹 예시 (상위 5개)]")
-        for i, g in enumerate(near_groups[:5]):
+        for i, g in enumerate(dup_groups[:5]):
             print(f"    그룹 {i+1} ({len(g)}장):")
             for idx in g:
-                print(f"      - {near_paths[idx]}")
+                print(f"      - {valid_paths[idx]}")
 
     print()
 
@@ -370,16 +294,9 @@ def print_report(
         "total_images": total,
         "model_name": model_name,
         "cosine_threshold": threshold,
-        "exact_duplicates": {
-            "group_count": exact_group_count,
-            "removable_count": exact_dup_count,
-        },
-        "near_duplicates": {
-            "group_count": len(near_groups),
-            "removable_count": near_dup_count,
-        },
-        "total_removable": total_removable,
-        "estimated_clean_count": total - total_removable,
+        "group_count": len(dup_groups),
+        "removable_count": removable_count,
+        "estimated_clean_count": total - removable_count,
     }
 
 
@@ -387,36 +304,26 @@ def print_report(
 # 중복 제거 실행
 # ---------------------------------------------------------------------------
 def deduplicate(
-    exact_groups: dict[str, list[Path]],
-    near_groups: list[list[int]],
-    near_paths: list[Path],
+    dup_groups: list[list[int]],
+    valid_paths: list[Path],
     output_dir: Optional[str],
     dry_run: bool,
 ) -> int:
     """중복 이미지를 제거합니다."""
     to_remove: set[Path] = set()
-
-    for ps in exact_groups.values():
-        for p in ps[1:]:
-            to_remove.add(p)
-
-    for g in near_groups:
+    for g in dup_groups:
         for idx in g[1:]:
-            to_remove.add(near_paths[idx])
+            to_remove.add(valid_paths[idx])
 
     if not to_remove:
         print("  제거할 중복 이미지가 없습니다.")
         return 0
 
     if output_dir:
-        all_paths = set(near_paths)
-        for ps in exact_groups.values():
-            all_paths.update(ps)
-        keep_paths = all_paths - to_remove
+        keep_paths = set(valid_paths) - to_remove
         out = Path(output_dir)
         if not dry_run:
             out.mkdir(parents=True, exist_ok=True)
-
         print(f"\n  유지할 이미지 {len(keep_paths):,}장을 '{output_dir}'로 복사합니다.")
         for p in tqdm(sorted(keep_paths), desc="복사 중", ncols=80):
             dest = out / p.name
@@ -546,10 +453,6 @@ def parse_args():
                         help=f"사용할 SSCD 모델 (기본값: {DEFAULT_MODEL})")
     common.add_argument("--batch_size", type=int, default=32,
                         help="배치 크기 (GPU 메모리에 맞게 조절, 기본값: 32)")
-    common.add_argument("--no_exact", action="store_true",
-                        help="MD5 정확한 중복 탐지 건너뜀")
-    common.add_argument("--exact_only", action="store_true",
-                        help="MD5 정확한 중복만 처리 (SSCD 유사 중복 탐지 건너뜀)")
     common.add_argument("--cache_dir", type=str,
                         default=str(Path.home() / ".cache" / "pca_dedup"),
                         help="특징 벡터 캐시 디렉토리 (기본값: ~/.cache/pca_dedup)")
@@ -686,66 +589,42 @@ def main():
         print("  [오류] 이미지를 찾을 수 없습니다. --data_dir 경로를 확인하세요.")
         sys.exit(1)
 
-    exact_only = getattr(args, "exact_only", False)
+    # -----------------------------------------------------------------------
+    # 2. SSCD 특징 추출
+    # -----------------------------------------------------------------------
+    print(f"\n[1/2] SSCD 특징 추출...")
+    print(f"  모델: {args.model}, 코사인 임계값: {args.threshold}")
+
+    features, valid_paths = extract_sscd_features(
+        paths,
+        model_name=args.model,
+        cache_dir=Path(args.cache_dir),
+        batch_size=args.batch_size,
+    )
+    print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
 
     # -----------------------------------------------------------------------
-    # 2. 정확한 중복 탐지 (MD5)
+    # 3. 코사인 유사도 기반 중복 그룹 탐지
     # -----------------------------------------------------------------------
-    exact_groups: dict[str, list[Path]] = {}
-    if not args.no_exact:
-        step_label = "[1/2]" if exact_only else "[1/3]"
-        print(f"\n{step_label} 정확한 중복 탐지 (MD5)...")
-        exact_groups = md5_exact_duplicates(paths, cache_dir=Path(args.cache_dir))
-
-    # -----------------------------------------------------------------------
-    # 3. SSCD 기반 유사 중복 탐지
-    # -----------------------------------------------------------------------
-    features = None
-    valid_paths = paths
-    near_groups: list[list[int]] = []
-
-    if not exact_only:
-        print(f"\n[2/3] SSCD Copy Detection 기반 유사 중복 탐지...")
-        print(f"  모델: {args.model}, 코사인 임계값: {args.threshold}")
-
-        features, valid_paths = extract_sscd_features(
-            paths,
-            model_name=args.model,
-            cache_dir=Path(args.cache_dir),
-            batch_size=args.batch_size,
-        )
-        print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
-
-        near_groups = find_cosine_duplicate_groups(features, args.threshold)
-    else:
-        print("\n  [--exact_only] SSCD 유사 중복 탐지를 건너뜁니다.")
+    print(f"\n[2/2] 중복 그룹 탐지...")
+    dup_groups = find_cosine_duplicate_groups(features, args.threshold)
 
     # -----------------------------------------------------------------------
     # 4. 보고서 출력
     # -----------------------------------------------------------------------
-    step_report = "[2/2]" if exact_only else "[3/3]"
-    print(f"\n{step_report} 결과 집계...")
     summary = print_report(
         total=len(paths),
-        exact_groups=exact_groups,
-        near_groups=near_groups,
-        near_paths=valid_paths,
+        dup_groups=dup_groups,
+        valid_paths=valid_paths,
         model_name=args.model,
         threshold=args.threshold,
     )
 
     if args.report:
-        serializable_exact = {
-            h: [str(p) for p in ps] for h, ps in exact_groups.items()
-        }
         serializable_near = [
-            [str(valid_paths[idx]) for idx in g] for g in near_groups
+            [str(valid_paths[idx]) for idx in g] for g in dup_groups
         ]
-        report_data = {
-            **summary,
-            "exact_groups": serializable_exact,
-            "near_groups": serializable_near,
-        }
+        report_data = {**summary, "dup_groups": serializable_near}
         Path(args.report).write_text(json.dumps(report_data, ensure_ascii=False, indent=2))
         print(f"  보고서 저장: {args.report}")
 
@@ -755,33 +634,17 @@ def main():
             from visualize_dedup import embed_2d, build_labels, plot_gallery, plot_interactive
             print("\n[HTML 시각화 생성 중...]")
             data_dir_label = ", ".join(str(d) for d in args.data_dir)
-            if exact_only:
-                exact_paths: list[Path] = []
-                for ps in exact_groups.values():
-                    exact_paths.extend(ps)
-                exact_paths = sorted(set(exact_paths))
-                labels, group_meta = build_labels(
-                    len(exact_paths), exact_groups, [], exact_paths
-                )
-                plot_gallery(
-                    exact_paths, labels, group_meta, args.save_html,
-                    data_dir_label, 512, args.threshold,
-                    thumb=args.thumb, coords=None,
-                )
-            else:
-                coords = embed_2d(features, "pca")
-                labels, group_meta = build_labels(
-                    len(valid_paths), exact_groups, near_groups, valid_paths
-                )
-                plot_gallery(
-                    valid_paths, labels, group_meta, args.save_html,
-                    data_dir_label, 512, args.threshold,
-                    thumb=args.thumb, coords=coords,
-                )
-                plot_interactive(
-                    coords, labels, group_meta, valid_paths, args.save_html,
-                    "pca", data_dir_label, 512, args.threshold,
-                )
+            coords = embed_2d(features, "pca")
+            labels, group_meta = build_labels(len(valid_paths), {}, dup_groups, valid_paths)
+            plot_gallery(
+                valid_paths, labels, group_meta, args.save_html,
+                data_dir_label, 512, args.threshold,
+                thumb=args.thumb, coords=coords,
+            )
+            plot_interactive(
+                coords, labels, group_meta, valid_paths, args.save_html,
+                "pca", data_dir_label, 512, args.threshold,
+            )
         except ImportError as e:
             print(f"  [경고] HTML 생성 실패 (visualize_dedup.py 필요): {e}")
 
@@ -806,9 +669,8 @@ def main():
 
             if confirm or output_dir:
                 removed = deduplicate(
-                    exact_groups=exact_groups,
-                    near_groups=near_groups,
-                    near_paths=valid_paths,
+                    dup_groups=dup_groups,
+                    valid_paths=valid_paths,
                     output_dir=output_dir,
                     dry_run=dry_run,
                 )

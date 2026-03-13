@@ -589,6 +589,8 @@ def parse_args():
                          help="서빙할 갤러리 HTML 파일 경로")
     p_serve.add_argument("--port", type=int, default=7474,
                          help="서버 포트 (기본값: 7474)")
+    p_serve.add_argument("--action", choices=["delete", "move"], default="move",
+                         help="버튼 클릭 시 동작: move(원본 디렉토리의 removed/로 이동, 기본값) 또는 delete(즉시 삭제)")
 
     args = parser.parse_args()
     if getattr(args, "data_dir", None) is None and args.mode != "serve":
@@ -602,7 +604,7 @@ def main():
 
     if args.mode == "serve":
         from visualize_dedup import run_server
-        run_server(args.html, port=args.port)
+        run_server(args.html, port=args.port, action=args.action)
         return
 
     if args.mode == "cross":

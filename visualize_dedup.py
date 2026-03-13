@@ -937,17 +937,31 @@ document.querySelectorAll('.del-btn').forEach(function(btn) {{
 # 삭제 서버
 # ---------------------------------------------------------------------------
 
-def run_server(html_path: str, port: int = 7474) -> None:
+def run_server(html_path: str, port: int = 7474, action: str = "move") -> None:
     """
     HTML 갤러리를 서빙하고 파일 삭제 API를 제공하는 로컬 서버.
 
     GET  /            → HTML 파일 반환
-    POST /api/delete  → {"path": "/abs/path/to/file"} → 파일 삭제
+    POST /api/delete  → {"path": "/abs/path/to/file"} → 파일 처리 (action에 따라)
+
+    action="move" : 원본 파일의 부모 디렉토리 아래 removed/ 로 이동 (기본값, 복구 가능)
+    action="delete": 즉시 영구 삭제
+    처리된 파일은 HTML 옆 <stem>_deleted/ 디렉토리의 deletion_log.jsonl 에 기록됩니다.
     """
     import http.server
     import json as _json
+    import datetime
+    import shutil as _shutil
 
-    html_bytes = Path(html_path).read_bytes()
+    html_path_obj = Path(html_path)
+    log_dir = html_path_obj.with_name(html_path_obj.stem + "_deleted")
+    log_path = log_dir / "deletion_log.jsonl"
+    html_bytes = html_path_obj.read_bytes()
+
+    def _append_log(entry: dict) -> None:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -971,8 +985,20 @@ def run_server(html_path: str, port: int = 7474) -> None:
                     if not target.is_file():
                         self._json(404, {'error': 'File not found'})
                         return
-                    target.unlink()
-                    print(f"  [삭제] {target}")
+                    ts = datetime.datetime.now().isoformat(timespec='seconds')
+                    if action == "move":
+                        removed_dir = target.parent / "removed"
+                        removed_dir.mkdir(parents=True, exist_ok=True)
+                        dest = removed_dir / target.name
+                        if dest.exists():
+                            dest = removed_dir / f"{target.stem}_{target.stat().st_ino}{target.suffix}"
+                        _shutil.move(str(target), dest)
+                        print(f"  [이동] {target} → {dest}")
+                        _append_log({"timestamp": ts, "action": "move", "original": str(target), "moved_to": str(dest)})
+                    else:
+                        target.unlink()
+                        print(f"  [삭제] {target}")
+                        _append_log({"timestamp": ts, "action": "delete", "original": str(target)})
                     self._json(200, {'ok': True})
                 except Exception as e:
                     self._json(500, {'error': str(e)})
@@ -993,8 +1019,11 @@ def run_server(html_path: str, port: int = 7474) -> None:
             pass
 
     server = http.server.HTTPServer(('localhost', port), _Handler)
+    action_desc = f"원본 디렉토리의 removed/ 로 이동" if action == "move" else "즉시 영구 삭제"
     print(f"\n  갤러리 서버 실행 중: http://localhost:{port}")
     print(f"  브라우저에서 위 주소를 열면 삭제 버튼이 활성화됩니다.")
+    print(f"  버튼 동작: {action_desc}")
+    print(f"  처리 기록: {log_path}")
     print(f"  종료: Ctrl+C\n")
     try:
         server.serve_forever()

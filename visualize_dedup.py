@@ -989,6 +989,7 @@ def run_server(html_path: str, port: int = 7474, action: str = "move") -> None:
                         return
                     ts = datetime.datetime.now().isoformat(timespec='seconds')
                     print(f"  [액션] action={action}", flush=True)
+                    json_companion = target.with_suffix(".json")
                     if action == "move":
                         removed_dir = target.parent / "removed"
                         removed_dir.mkdir(parents=True, exist_ok=True)
@@ -998,10 +999,21 @@ def run_server(html_path: str, port: int = 7474, action: str = "move") -> None:
                         _shutil.move(str(target), dest)
                         print(f"  [이동] {target} → {dest}", flush=True)
                         _append_log({"timestamp": ts, "action": "move", "original": str(target), "moved_to": str(dest)})
+                        if json_companion.is_file():
+                            json_dest = removed_dir / json_companion.name
+                            if json_dest.exists():
+                                json_dest = removed_dir / f"{json_companion.stem}_{json_companion.stat().st_ino}{json_companion.suffix}"
+                            _shutil.move(str(json_companion), json_dest)
+                            print(f"  [이동] {json_companion} → {json_dest}", flush=True)
+                            _append_log({"timestamp": ts, "action": "move", "original": str(json_companion), "moved_to": str(json_dest)})
                     else:
                         target.unlink()
                         print(f"  [삭제] {target}", flush=True)
                         _append_log({"timestamp": ts, "action": "delete", "original": str(target)})
+                        if json_companion.is_file():
+                            json_companion.unlink()
+                            print(f"  [삭제] {json_companion}", flush=True)
+                            _append_log({"timestamp": ts, "action": "delete", "original": str(json_companion)})
                     self._json(200, {'ok': True})
                 except Exception as e:
                     print(f"  [오류] {e}", flush=True)

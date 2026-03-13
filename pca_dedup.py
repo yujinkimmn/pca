@@ -65,15 +65,60 @@ def load_image_as_vector(path: Path, image_size: int) -> Optional[np.ndarray]:
 # ---------------------------------------------------------------------------
 # 정확한 MD5 기반 중복 탐지 (픽셀 완전 동일)
 # ---------------------------------------------------------------------------
-def md5_exact_duplicates(paths: list[Path]) -> dict[str, list[Path]]:
-    """MD5 해시를 이용해 바이트 단위로 완전히 동일한 파일을 그룹화합니다."""
+def _load_md5_cache(cache_dir: Path) -> dict[str, tuple[float, int, str]]:
+    """MD5 캐시 파일을 로드합니다. {path_str: (mtime, size, md5)} 형태."""
+    cache_file = cache_dir / "md5_cache.json"
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            return {k: tuple(v) for k, v in data.items()}
+        except Exception:
+            pass
+    return {}
+
+
+def _save_md5_cache(cache_dir: Path, cache: dict[str, tuple[float, int, str]]) -> None:
+    """MD5 캐시를 파일에 저장합니다."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "md5_cache.json"
+    cache_file.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+
+
+def md5_exact_duplicates(
+    paths: list[Path],
+    cache_dir: Optional[Path] = None,
+) -> dict[str, list[Path]]:
+    """MD5 해시를 이용해 바이트 단위로 완전히 동일한 파일을 그룹화합니다.
+
+    cache_dir가 지정되면 파일별 (mtime, size, md5)를 캐싱하여
+    변경되지 않은 파일은 재계산 없이 재사용합니다.
+    """
+    md5_cache: dict[str, tuple[float, int, str]] = {}
+    if cache_dir is not None:
+        md5_cache = _load_md5_cache(cache_dir)
+
     hash_to_paths: dict[str, list[Path]] = defaultdict(list)
+    cache_updated = False
+
     for p in tqdm(paths, desc="MD5 exact-dup scan", ncols=80):
         try:
-            h = hashlib.md5(p.read_bytes()).hexdigest()
+            st = p.stat()
+            key = str(p)
+            cached = md5_cache.get(key)
+            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                h = cached[2]
+            else:
+                h = hashlib.md5(p.read_bytes()).hexdigest()
+                md5_cache[key] = (st.st_mtime, st.st_size, h)
+                cache_updated = True
             hash_to_paths[h].append(p)
         except Exception as e:
             print(f"  [경고] MD5 계산 실패 ({p}): {e}", file=sys.stderr)
+
+    if cache_dir is not None and cache_updated:
+        _save_md5_cache(cache_dir, md5_cache)
+        print(f"  [MD5 캐시 저장] {cache_dir / 'md5_cache.json'}")
+
     return {h: ps for h, ps in hash_to_paths.items() if len(ps) > 1}
 
 
@@ -649,7 +694,7 @@ def main():
     if not args.no_exact:
         step_label = "[1/2]" if exact_only else "[1/3]"
         print(f"\n{step_label} 정확한 중복 탐지 (MD5)...")
-        exact_groups = md5_exact_duplicates(paths)
+        exact_groups = md5_exact_duplicates(paths, cache_dir=Path(args.cache_dir))
 
     # -----------------------------------------------------------------------
     # 3. PCA Hash 기반 유사 중복 탐지

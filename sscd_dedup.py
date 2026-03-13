@@ -36,14 +36,13 @@ from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
 # 지원 모델 목록
+# HuggingFace Hub: m3/sscd-copy-detection (TorchScript 파일)
 # ---------------------------------------------------------------------------
+SSCD_HF_REPO = "m3/sscd-copy-detection"
 SSCD_MODELS: dict[str, str] = {
-    "sscd_disc_mixup": (
-        "https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt"
-    ),
-    "sscd_disc_large": (
-        "https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_large.torchscript.pt"
-    ),
+    "sscd_disc_mixup":    "sscd_disc_mixup.torchscript.pt",
+    "sscd_disc_blur":     "sscd_disc_blur.torchscript.pt",
+    "sscd_disc_advanced": "sscd_disc_advanced.torchscript.pt",
 }
 DEFAULT_MODEL = "sscd_disc_mixup"
 
@@ -128,9 +127,13 @@ def extract_sscd_features(
             "SSCD 특징 추출에는 'torch'와 'torchvision'이 필요합니다.\n"
             "설치: pip install torch torchvision"
         )
-
-    model_dir = cache_dir if cache_dir is not None else Path.home() / ".cache" / "pca_dedup"
-    model_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise ImportError(
+            "SSCD 모델 다운로드에는 'huggingface_hub'이 필요합니다.\n"
+            "설치: pip install huggingface_hub"
+        )
 
     if cache_dir is not None:
         key = _sscd_cache_key(paths, model_name)
@@ -140,19 +143,17 @@ def extract_sscd_features(
             print(f"  [SSCD 캐시 HIT] {len(valid):,}장 로드 ({cache_dir / (key[:8] + '...')}.npz)")
             return feats, valid
 
-    model_url = SSCD_MODELS.get(model_name)
-    if model_url is None:
+    filename = SSCD_MODELS.get(model_name)
+    if filename is None:
         raise ValueError(f"알 수 없는 모델: {model_name}. 사용 가능: {list(SSCD_MODELS)}")
 
-    model_file = model_dir / f"{model_name}.torchscript.pt"
-    if not model_file.exists():
-        print(f"  [SSCD 모델 다운로드] {model_url}")
-        print(f"  → {model_file}")
-        torch.hub.download_url_to_file(model_url, str(model_file))
+    # HuggingFace Hub에서 TorchScript 모델 다운로드 (자동 캐시: ~/.cache/huggingface/hub/)
+    print(f"  [SSCD] HuggingFace Hub에서 모델 로드 중... ({SSCD_HF_REPO}/{filename})")
+    model_path = hf_hub_download(repo_id=SSCD_HF_REPO, filename=filename)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"  [SSCD] 모델 로드 중... model={model_name}, device={device}")
-    model = torch.jit.load(str(model_file), map_location=device)
+    print(f"  [SSCD] 모델 로드 완료. device={device}")
+    model = torch.jit.load(model_path, map_location=device)
     model.eval()
 
     transform = T.Compose([

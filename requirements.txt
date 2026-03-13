@@ -5,4 +5,4 @@ scipy>=1.11
 tqdm>=4.65
 
 # sscd_dedup.py 전용 (선택)
-# pip install torch torchvision
+# pip install torch torchvision huggingface_hub

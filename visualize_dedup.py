@@ -993,14 +993,15 @@ def run_server(html_path: str, port: int = 7474, action: str = "move") -> None:
                         if dest.exists():
                             dest = removed_dir / f"{target.stem}_{target.stat().st_ino}{target.suffix}"
                         _shutil.move(str(target), dest)
-                        print(f"  [이동] {target} → {dest}")
+                        print(f"  [이동] {target} → {dest}", flush=True)
                         _append_log({"timestamp": ts, "action": "move", "original": str(target), "moved_to": str(dest)})
                     else:
                         target.unlink()
-                        print(f"  [삭제] {target}")
+                        print(f"  [삭제] {target}", flush=True)
                         _append_log({"timestamp": ts, "action": "delete", "original": str(target)})
                     self._json(200, {'ok': True})
                 except Exception as e:
+                    print(f"  [오류] {e}", flush=True)
                     self._json(500, {'error': str(e)})
             else:
                 self.send_response(404)

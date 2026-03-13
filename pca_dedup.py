@@ -557,8 +557,8 @@ def parse_args():
                         help="분석 결과를 저장할 JSON 파일 경로")
     common.add_argument("--save_html", type=str, default=None, metavar="PATH",
                         help="HTML 시각화를 저장할 경로 (갤러리 + 인터랙티브 scatter)")
-    common.add_argument("--thumb", type=int, default=320,
-                        help="갤러리 썸네일 크기 px (기본값: 320)")
+    common.add_argument("--thumb", type=int, default=180,
+                        help="갤러리 썸네일 크기 px (기본값: 180)")
 
     # --- analyze ---
     p_analyze = sub.add_parser("analyze", parents=[common],

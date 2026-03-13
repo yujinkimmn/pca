@@ -634,7 +634,7 @@ def plot_gallery(valid_paths, labels, group_meta, output_path,
             img = PILImage.open(path).convert("RGB")
             img.thumbnail((thumb, thumb))
             buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
+            img.save(buf, format="JPEG", quality=75)
             return base64.b64encode(buf.getvalue()).decode()
         except Exception:
             return ""

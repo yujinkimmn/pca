@@ -503,6 +503,8 @@ def parse_args():
                         help="특징 추출 시 리사이즈할 이미지 크기 (기본값: 64)")
     common.add_argument("--no_exact", action="store_true",
                         help="MD5 정확한 중복 탐지 건너뜀")
+    common.add_argument("--exact_only", action="store_true",
+                        help="MD5 정확한 중복만 처리 (PCA Hash 유사 중복 탐지 건너뜀)")
     common.add_argument("--cache_dir", type=str,
                         default=str(Path.home() / ".cache" / "pca_dedup"),
                         help="특징 벡터 캐시 디렉토리 (기본값: ~/.cache/pca_dedup)")
@@ -638,39 +640,50 @@ def main():
         print("  [오류] 이미지를 찾을 수 없습니다. --data_dir 경로를 확인하세요.")
         sys.exit(1)
 
+    exact_only = getattr(args, "exact_only", False)
+
     # -----------------------------------------------------------------------
     # 2. 정확한 중복 탐지 (MD5)
     # -----------------------------------------------------------------------
     exact_groups: dict[str, list[Path]] = {}
     if not args.no_exact:
-        print("\n[1/3] 정확한 중복 탐지 (MD5)...")
+        step_label = "[1/2]" if exact_only else "[1/3]"
+        print(f"\n{step_label} 정확한 중복 탐지 (MD5)...")
         exact_groups = md5_exact_duplicates(paths)
 
     # -----------------------------------------------------------------------
     # 3. PCA Hash 기반 유사 중복 탐지
     # -----------------------------------------------------------------------
-    print(f"\n[2/3] PCA Hash 기반 유사 중복 탐지...")
-    print(f"  이미지 크기: {args.image_size}x{args.image_size}, "
-          f"해시 비트: {args.n_components}, "
-          f"Hamming 임계값: {args.hamming_threshold}")
+    features = None
+    valid_paths = paths
+    near_groups: list[list[int]] = []
 
-    features, valid_paths = extract_features(
-        paths, args.image_size, cache_dir=Path(args.cache_dir)
-    )
-    print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
+    if not exact_only:
+        print(f"\n[2/3] PCA Hash 기반 유사 중복 탐지...")
+        print(f"  이미지 크기: {args.image_size}x{args.image_size}, "
+              f"해시 비트: {args.n_components}, "
+              f"Hamming 임계값: {args.hamming_threshold}")
 
-    hashes, pca_model = compute_pca_hashes(features, args.n_components)
-    print(f"  PCA 설명 분산 비율: {pca_model.explained_variance_ratio_.sum()*100:.1f}%")
+        features, valid_paths = extract_features(
+            paths, args.image_size, cache_dir=Path(args.cache_dir)
+        )
+        print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
 
-    print("  Hamming distance 계산 중...")
-    dist_matrix = hamming_distance_matrix(hashes)
+        hashes, pca_model = compute_pca_hashes(features, args.n_components)
+        print(f"  PCA 설명 분산 비율: {pca_model.explained_variance_ratio_.sum()*100:.1f}%")
 
-    near_groups = find_duplicate_groups(dist_matrix, valid_paths, args.hamming_threshold)
+        print("  Hamming distance 계산 중...")
+        dist_matrix = hamming_distance_matrix(hashes)
+
+        near_groups = find_duplicate_groups(dist_matrix, valid_paths, args.hamming_threshold)
+    else:
+        print("\n  [--exact_only] PCA Hash 유사 중복 탐지를 건너뜁니다.")
 
     # -----------------------------------------------------------------------
     # 4. 보고서 출력
     # -----------------------------------------------------------------------
-    print(f"\n[3/3] 결과 집계...")
+    step_report = "[2/2]" if exact_only else "[3/3]"
+    print(f"\n{step_report} 결과 집계...")
     summary = print_report(
         total=len(paths),
         exact_groups=exact_groups,
@@ -701,20 +714,36 @@ def main():
         try:
             from visualize_dedup import embed_2d, build_labels, plot_gallery, plot_interactive
             print("\n[HTML 시각화 생성 중...]")
-            coords = embed_2d(features, "pca")
-            labels, group_meta = build_labels(
-                len(valid_paths), exact_groups, near_groups, valid_paths
-            )
             data_dir_label = ", ".join(str(d) for d in args.data_dir)
-            plot_gallery(
-                valid_paths, labels, group_meta, args.save_html,
-                data_dir_label, args.n_components, args.hamming_threshold,
-                thumb=args.thumb, coords=coords,
-            )
-            plot_interactive(
-                coords, labels, group_meta, valid_paths, args.save_html,
-                "pca", data_dir_label, args.n_components, args.hamming_threshold,
-            )
+            if exact_only:
+                # PCA 피처가 없으므로 산점도 없이 갤러리만 생성
+                # exact 그룹에 속한 경로만 valid_paths로 사용
+                exact_paths: list[Path] = []
+                for ps in exact_groups.values():
+                    exact_paths.extend(ps)
+                exact_paths = sorted(set(exact_paths))
+                labels, group_meta = build_labels(
+                    len(exact_paths), exact_groups, [], exact_paths
+                )
+                plot_gallery(
+                    exact_paths, labels, group_meta, args.save_html,
+                    data_dir_label, args.n_components, args.hamming_threshold,
+                    thumb=args.thumb, coords=None,
+                )
+            else:
+                coords = embed_2d(features, "pca")
+                labels, group_meta = build_labels(
+                    len(valid_paths), exact_groups, near_groups, valid_paths
+                )
+                plot_gallery(
+                    valid_paths, labels, group_meta, args.save_html,
+                    data_dir_label, args.n_components, args.hamming_threshold,
+                    thumb=args.thumb, coords=coords,
+                )
+                plot_interactive(
+                    coords, labels, group_meta, valid_paths, args.save_html,
+                    "pca", data_dir_label, args.n_components, args.hamming_threshold,
+                )
         except ImportError as e:
             print(f"  [경고] HTML 생성 실패 (visualize_dedup.py 필요): {e}")
 

@@ -671,7 +671,7 @@ def main():
                     data_dir_label, args.n_components, args.hamming_threshold,
                     thumb=args.thumb, coords=coords,
                 )
-            except ImportError as e:
+            except Exception as e:
                 print(f"  [경고] HTML 생성 실패: {e}")
 
         return
@@ -791,7 +791,7 @@ def main():
                     coords, labels, group_meta, valid_paths, args.save_html,
                     "pca", data_dir_label, args.n_components, args.hamming_threshold,
                 )
-        except ImportError as e:
+        except Exception as e:
             print(f"  [경고] HTML 생성 실패 (visualize_dedup.py 필요): {e}")
 
     # -----------------------------------------------------------------------

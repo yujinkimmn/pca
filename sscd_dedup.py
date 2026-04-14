@@ -99,11 +99,104 @@ def _save_feature_cache(
     )
 
 
+def _download_sscd_model(
+    repo_id: str,
+    filename: str,
+    cache_dir: Optional[Path] = None,
+    local_model_path: Optional[str] = None,
+) -> str:
+    """SSCD TorchScript 모델을 가져옵니다.
+
+    다운로드 우선순위:
+      0. local_model_path 지정 시 → 즉시 반환 (네트워크 불필요)
+      1. HF Hub 로컬 캐시 (네트워크 불필요)
+      2. HF Hub 네트워크 다운로드
+      3. urllib 직접 다운로드 (HF Hub httpx 오류 시 fallback)
+
+    Args:
+        repo_id: HuggingFace 저장소 ID (예: "m3/sscd-copy-detection")
+        filename: 모델 파일명 (예: "sscd_disc_mixup.torchscript.pt")
+        cache_dir: fallback 다운로드 시 사용할 로컬 디렉토리
+        local_model_path: 로컬에 이미 저장된 .pt 파일 경로 (지정 시 다운로드 생략)
+
+    Returns:
+        로컬 모델 파일 경로 (str)
+    """
+    # --- 방법 0: 로컬 경로 직접 지정 ---
+    if local_model_path is not None:
+        p = Path(local_model_path)
+        if not p.exists():
+            raise FileNotFoundError(f"--model_path 파일이 없습니다: {p}")
+        print(f"  [SSCD] 로컬 모델 파일 사용: {p}")
+        return str(p)
+
+    # --- 방법 1·2: huggingface_hub ---
+    hf_available = False
+    try:
+        from huggingface_hub import hf_hub_download
+        hf_available = True
+    except ImportError:
+        pass
+
+    if hf_available:
+        # 먼저 캐시만 확인 (네트워크 사용 안 함)
+        try:
+            return hf_hub_download(repo_id=repo_id, filename=filename, local_files_only=True)
+        except Exception:
+            pass
+        # 캐시 미스 → 네트워크 다운로드
+        try:
+            return hf_hub_download(repo_id=repo_id, filename=filename)
+        except Exception as e:
+            msg = str(e).lower()
+            if any(k in msg for k in ("cannot send a request", "client has been closed",
+                                      "connection", "timeout", "httpx")):
+                print(f"  [경고] HF Hub 다운로드 실패 ({e}), urllib fallback으로 재시도합니다.",
+                      file=sys.stderr)
+            else:
+                raise  # ImportError·ValueError 등은 재발생
+
+    # --- 방법 3: urllib 직접 다운로드 ---
+    import urllib.request
+
+    url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+    if cache_dir is None:
+        fallback_dir = Path.home() / ".cache" / "pca_dedup" / "hf_models"
+    else:
+        fallback_dir = Path(cache_dir) / "hf_models"
+    dest = fallback_dir / filename
+
+    if dest.exists():
+        print(f"  [캐시] 로컬 모델 파일 사용: {dest}")
+    else:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  [다운로드] {url}")
+        print(f"  → {dest}")
+
+        def _reporthook(block_num: int, block_size: int, total_size: int) -> None:
+            downloaded = block_num * block_size
+            if total_size > 0:
+                pct = min(downloaded / total_size * 100, 100)
+                mb = downloaded / 1024 / 1024
+                total_mb = total_size / 1024 / 1024
+                print(f"\r  {pct:5.1f}%  {mb:.1f} / {total_mb:.1f} MB", end="", flush=True)
+
+        try:
+            urllib.request.urlretrieve(url, str(dest), reporthook=_reporthook)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        print()  # newline after progress
+
+    return str(dest)
+
+
 def extract_sscd_features(
     paths: list[Path],
     model_name: str = DEFAULT_MODEL,
     cache_dir: Optional[Path] = None,
     batch_size: int = 32,
+    local_model_path: Optional[str] = None,
 ) -> tuple[np.ndarray, list[Path]]:
     """SSCD 모델로 512차원 L2 정규화 임베딩을 추출합니다.
 
@@ -127,14 +220,6 @@ def extract_sscd_features(
             "SSCD 특징 추출에는 'torch'와 'torchvision'이 필요합니다.\n"
             "설치: pip install torch torchvision"
         )
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        raise ImportError(
-            "SSCD 모델 다운로드에는 'huggingface_hub'이 필요합니다.\n"
-            "설치: pip install huggingface_hub"
-        )
-
     if cache_dir is not None:
         key = _sscd_cache_key(paths, model_name)
         cached = _load_feature_cache(cache_dir, key)
@@ -149,7 +234,8 @@ def extract_sscd_features(
 
     # HuggingFace Hub에서 TorchScript 모델 다운로드 (자동 캐시: ~/.cache/huggingface/hub/)
     print(f"  [SSCD] HuggingFace Hub에서 모델 로드 중... ({SSCD_HF_REPO}/{filename})")
-    model_path = hf_hub_download(repo_id=SSCD_HF_REPO, filename=filename)
+    model_path = _download_sscd_model(SSCD_HF_REPO, filename, cache_dir,
+                                      local_model_path=local_model_path)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"  [SSCD] 모델 로드 완료. device={device}")
@@ -355,6 +441,7 @@ def cross_deduplicate(
     model_name: str = DEFAULT_MODEL,
     cache_dir: Optional[Path] = None,
     batch_size: int = 32,
+    local_model_path: Optional[str] = None,
 ):
     """source_dir의 이미지 중 ref_dir와 유사한 것들을 탐지합니다.
     (예: train set에서 test set과 겹치는 이미지 제거)
@@ -373,6 +460,7 @@ def cross_deduplicate(
     features, valid_paths = extract_sscd_features(
         all_paths_list, model_name=model_name,
         cache_dir=cache_dir, batch_size=batch_size,
+        local_model_path=local_model_path,
     )
 
     source_set = set(source_paths)
@@ -463,6 +551,8 @@ def parse_args():
                         help="HTML 시각화를 저장할 경로 (갤러리 + 인터랙티브 scatter)")
     common.add_argument("--thumb", type=int, default=180,
                         help="갤러리 썸네일 크기 px (기본값: 180)")
+    common.add_argument("--model_path", type=str, default=None, metavar="PATH",
+                        help="로컬 SSCD TorchScript 모델 파일 경로 (.pt). 지정 시 HF Hub 다운로드 생략.")
 
     # --- analyze ---
     sub.add_parser("analyze", parents=[common],
@@ -520,6 +610,7 @@ def main():
             model_name=args.model,
             cache_dir=Path(args.cache_dir),
             batch_size=args.batch_size,
+            local_model_path=getattr(args, "model_path", None),
         )
         print(f"\n  완료: {removed}장 제거됨  ({time.time()-start_time:.1f}s)")
 
@@ -601,6 +692,7 @@ def main():
         model_name=args.model,
         cache_dir=Path(args.cache_dir),
         batch_size=args.batch_size,
+        local_model_path=getattr(args, "model_path", None),
     )
     print(f"  유효하게 로드된 이미지: {len(valid_paths):,} / {len(paths):,}")
 
